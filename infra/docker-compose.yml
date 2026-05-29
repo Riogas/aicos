@@ -1,0 +1,105 @@
+# AICOS — Stack base (R2a + R2b)
+# Levanta Postgres + Redis + Qdrant + Paperclip. Servicios propios (R3+) se agregan después.
+# Uso: cd ~/aicos && docker compose -f infra/docker-compose.yml up -d
+#
+# Acceso desde la red Docker:  postgres / redis / qdrant / paperclip
+# Acceso desde el host (WSL):  localhost:5432 / :6379 / :6333 / :3100
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aicos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_EXTRA_DBS: ${POSTGRES_EXTRA_DBS}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: aicos-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.0
+    container_name: aicos-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  paperclip:
+    build:
+      context: ../vendor/paperclip
+      dockerfile: Dockerfile
+      args:
+        USER_UID: "1000"
+        USER_GID: "1000"
+    image: aicos/paperclip:local
+    container_name: aicos-paperclip
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Para que Paperclip pueda llamar al bridge en el host (aicos-bridge --serve
+    # corre en :7100 del host).
+    # WSL+Docker quirk: `host-gateway` se mapea a la interfaz wrong (172.16.x.x WSL/Windows)
+    # en vez del gateway del network. Pinear a la IP del gateway de infra_default que
+    # SI tiene route hacia el host. Verificar con:
+    #   docker network inspect infra_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+    extra_hosts:
+      - "host.docker.internal:172.18.0.1"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/paperclip
+      PORT: "3100"
+      HOST: 0.0.0.0
+      SERVE_UI: "true"
+      BETTER_AUTH_SECRET: ${PAPERCLIP_AUTH_SECRET}
+      PAPERCLIP_HOME: /paperclip
+      PAPERCLIP_INSTANCE_ID: default
+      PAPERCLIP_CONFIG: /paperclip/instances/default/config.json
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+    volumes:
+      - paperclip-data:/paperclip
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3100/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  postgres-data:
+  redis-data:
+  qdrant-data:
+  paperclip-data:

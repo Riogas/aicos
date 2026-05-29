@@ -1,0 +1,33 @@
+{
+  "name": "@aicos/paperclip-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Bridge between Paperclip and Hermes Agent. Modes: CLI direct + HTTP server (--serve).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "aicos-bridge": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "serve:dev": "tsx src/index.ts --serve",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

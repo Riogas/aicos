@@ -1,0 +1,15 @@
+.env
+.env.local
+.env.bridge
+.secrets/
+*.log
+node_modules/
+dist/
+.turbo/
+.next/
+.cache/
+.DS_Store
+
+# Docker volumes son externos al repo, ignoramos cualquier cosa local
+data/
+vendor/
