@@ -3,6 +3,13 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { PaperclipClient } from "./paperclip-client.js";
 import { executeRun } from "./run.js";
+import {
+  loadRegistry,
+  resolvePersonaByPaperclipId,
+  resolveWorkspaceByProjectId,
+} from "./registry.js";
+import type { ProjectWorkspace } from "./registry.js";
+import { createQuotaClient } from "./quota-client.js";
 
 const RunRequestSchema = z.object({
   issueId: z.string().optional(),
@@ -21,6 +28,7 @@ export interface ServerOptions {
   port: number;
   paperclipApiUrl?: string;
   paperclipApiKey?: string;
+  quotaServiceUrl?: string;
 }
 
 export async function startServer(opts: ServerOptions): Promise<FastifyInstance> {
@@ -30,16 +38,41 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     },
   });
 
+  const registryStats = loadRegistry();
+  app.log.info(
+    {
+      ...registryStats,
+    },
+    "registry loaded",
+  );
+
   const paperclipReady =
     Boolean(opts.paperclipApiUrl) && Boolean(opts.paperclipApiKey);
+
+  const quotaClient = createQuotaClient(opts.quotaServiceUrl);
+  app.log.info(
+    { quotaEnabled: quotaClient.isEnabled(), url: opts.quotaServiceUrl ?? null },
+    "quota client init",
+  );
 
   app.get("/health", async () => ({
     status: "ok",
     service: "aicos-bridge",
-    version: "0.2.0",
+    version: "0.3.0",
     paperclip: paperclipReady ? "configured" : "missing",
+    quota: quotaClient.isEnabled() ? "configured" : "missing",
     hermes: "spawned-on-demand",
+    registry: {
+      loaded: registryStats.registryLoaded && registryStats.keysLoaded,
+      resolvableAgents: registryStats.resolvable,
+    },
   }));
+
+  app.post("/admin/reload-registry", async () => {
+    const s = loadRegistry();
+    app.log.info(s, "registry reloaded");
+    return { ok: true, ...s };
+  });
 
   app.post(
     "/run",
@@ -54,20 +87,31 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         });
       }
 
-      // Contrato real de Paperclip http adapter (descubierto en logs 2026-05-29):
-      //   body = { prompt, issueId, agentId, runId, context }
-      //   - prompt/issueId top-level: vienen del payloadTemplate del agent
-      //     SIN templating (Paperclip los manda literales tipo "{{issue.id}}")
-      //   - context.issueId: el UUID REAL del issue
-      //   - context.paperclipIssue: objeto issue completo
-      //   - context.paperclipTaskMarkdown: contenido del task en MD (ideal como prompt)
-
       const looksLikeTemplate = (v: string | undefined): boolean =>
         typeof v === "string" && (v.includes("{{") || v.startsWith("${"));
 
       const ctx = parsed.context as Record<string, unknown> | undefined;
       const ctxIssue = ctx?.paperclipIssue as Record<string, unknown> | undefined;
       const taskMarkdown = ctx?.paperclipTaskMarkdown as string | undefined;
+
+      // Persona lookup desde el registry segun agentId que Paperclip nos pasa
+      const persona = parsed.agentId
+        ? resolvePersonaByPaperclipId(parsed.agentId)
+        : null;
+
+      // Workspace resolution:
+      //   PRIORIDAD: registry/project-workspaces.json (paths del HOST).
+      //   Paperclip inyecta paperclipWorkspace.cwd con paths internos del container
+      //   (ej. "/paperclip/instances/.../projects/..."), que NO existen en el host
+      //   donde corre el bridge. Si usamos esos cwd, spawn de hermes da exitCode 127
+      //   (ENOENT). Asi que ignoramos paperclipWorkspace por completo para cwd y
+      //   confiamos solo en nuestro map local.
+      const ctxProjectId =
+        (ctxIssue?.projectId as string | undefined) ??
+        (ctx?.projectId as string | undefined);
+      const workspace: ProjectWorkspace | null = ctxProjectId
+        ? resolveWorkspaceByProjectId(ctxProjectId)
+        : null;
 
       app.log.info(
         {
@@ -77,6 +121,12 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
           paperclipIssueKeys: ctxIssue ? Object.keys(ctxIssue) : null,
           hasTaskMarkdown: Boolean(taskMarkdown),
           taskMarkdownLen: taskMarkdown?.length ?? 0,
+          personaRegistryId: persona?.registryId,
+          personaName: persona?.agentName,
+          personaCli: persona?.preferredModel?.cli,
+          workspaceSource: workspace ? "registry" : "default-cwd",
+          workspaceCwd: workspace?.cwd ?? null,
+          workspaceProject: workspace?.projectName ?? null,
         },
         "payload structure",
       );
@@ -91,18 +141,22 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
       let prompt: string | undefined =
         !looksLikeTemplate(parsed.prompt) ? parsed.prompt : undefined;
 
+      // Determina cual API key Paperclip usar:
+      //   1. Si el agente esta en el registry y tiene su token: usa ese
+      //   2. Si no: usa el generico (AICOS Hermes) si esta configurado
+      const apiKeyForCallbacks = persona?.apiKey ?? opts.paperclipApiKey;
+      const apiUrlForCallbacks = opts.paperclipApiUrl;
+
       let pcClient: PaperclipClient | undefined;
-      if (issueId && paperclipReady) {
+      if (issueId && apiUrlForCallbacks && apiKeyForCallbacks) {
         pcClient = new PaperclipClient(
           {
-            apiUrl: opts.paperclipApiUrl!,
-            apiKey: opts.paperclipApiKey!,
+            apiUrl: apiUrlForCallbacks,
+            apiKey: apiKeyForCallbacks,
           },
           parsed.runId,
         );
 
-        // Estrategia de prompt: priorizar el task markdown (ya formateado);
-        // fallback a title+description del paperclipIssue; ultimo recurso = GET API.
         if (!prompt && taskMarkdown && taskMarkdown.trim().length > 0) {
           prompt = taskMarkdown.trim();
         }
@@ -134,23 +188,27 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         });
       }
 
-      // Fire-and-forget: NO bloqueamos a Paperclip.
-      // El resultado va de vuelta via API (comment + status).
       setImmediate(async () => {
         try {
           const result = await executeRun({
             prompt: prompt!,
             model: parsed.model,
             provider: parsed.provider,
+            persona: persona ?? undefined,
+            workspace,
+            ticketIdentifier: (ctxIssue?.identifier as string | undefined),
             paperclip:
               pcClient && issueId
                 ? { client: pcClient, issueId }
                 : undefined,
+            quotaClient,
           });
           app.log.info(
             {
               issueId,
               runId: parsed.runId,
+              persona: persona?.registryId,
+              mode: result.mode,
               exitCode: result.exitCode,
               durationMs: result.durationMs,
               outputLen: result.output.length,
@@ -169,6 +227,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         status: "accepted",
         issueId: issueId ?? null,
         runId: parsed.runId ?? null,
+        persona: persona?.registryId ?? null,
       });
     },
   );

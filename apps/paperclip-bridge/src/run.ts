@@ -1,27 +1,176 @@
+import { spawn } from "node:child_process";
 import { runHermesOneshotCaptured } from "./hermes.js";
 import { PaperclipClient } from "./paperclip-client.js";
+import type { PersonaResolution, ProjectWorkspace } from "./registry.js";
+import { buildPersonaPrompt } from "./registry.js";
+import { invokeCli, buildDirectCliPrompt } from "./cli-direct.js";
+import type { SupportedCli } from "./cli-direct.js";
+import {
+  retrieveRelatedMemories,
+  storeMemory,
+  formatMemoriesForPrompt,
+} from "./memory.js";
+import type { QuotaClient } from "./quota-client.js";
+import { buildCandidates, inferProvider } from "./provider-map.js";
+
+interface CommitResult {
+  attempted: boolean;
+  committed: boolean;
+  hadChanges: boolean;
+  commitSha: string | null;
+  stderr: string;
+}
+
+function gitRun(
+  cwd: string,
+  args: string[],
+  authorEmail: string,
+  authorName: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        GIT_AUTHOR_EMAIL: authorEmail,
+        GIT_AUTHOR_NAME: authorName,
+        GIT_COMMITTER_EMAIL: authorEmail,
+        GIT_COMMITTER_NAME: authorName,
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (c: Buffer) => {
+      stdout += c.toString("utf-8");
+    });
+    proc.stderr.on("data", (c: Buffer) => {
+      stderr += c.toString("utf-8");
+    });
+    proc.on("error", (err) =>
+      resolve({ code: 127, stdout, stderr: `${stderr}\n${err.message}` }),
+    );
+    proc.on("exit", (code) =>
+      resolve({ code: code ?? 1, stdout, stderr }),
+    );
+  });
+}
+
+async function autoCommitWorkspace(
+  workspace: ProjectWorkspace,
+  persona: PersonaResolution,
+  ticketTitle: string,
+  ticketIdentifier?: string,
+): Promise<CommitResult> {
+  const cwd = workspace.cwd;
+  const email = `${persona.registryId}@aicos.local`;
+  const name = persona.agentName;
+
+  // 1. status --porcelain para saber si hay cambios
+  const status = await gitRun(cwd, ["status", "--porcelain"], email, name);
+  if (status.code !== 0) {
+    return {
+      attempted: true,
+      committed: false,
+      hadChanges: false,
+      commitSha: null,
+      stderr: `git status fail: ${status.stderr}`,
+    };
+  }
+  if (status.stdout.trim() === "") {
+    return {
+      attempted: true,
+      committed: false,
+      hadChanges: false,
+      commitSha: null,
+      stderr: "",
+    };
+  }
+
+  // 2. add -A
+  const add = await gitRun(cwd, ["add", "-A"], email, name);
+  if (add.code !== 0) {
+    return {
+      attempted: true,
+      committed: false,
+      hadChanges: true,
+      commitSha: null,
+      stderr: `git add fail: ${add.stderr}`,
+    };
+  }
+
+  // 3. commit
+  const msgLines = [
+    `${persona.agentName}: ${ticketTitle.slice(0, 60)}`,
+    "",
+    `Auto-commit by AICOS bridge.`,
+    `Agent: ${persona.agentName} (${persona.registryId})`,
+    ticketIdentifier ? `Ticket: ${ticketIdentifier}` : "",
+    `CLI: ${persona.preferredModel?.cli}/${persona.preferredModel?.model ?? ""}`,
+  ].filter(Boolean);
+  const commit = await gitRun(
+    cwd,
+    ["commit", "-m", msgLines.join("\n")],
+    email,
+    name,
+  );
+  if (commit.code !== 0) {
+    return {
+      attempted: true,
+      committed: false,
+      hadChanges: true,
+      commitSha: null,
+      stderr: `git commit fail: ${commit.stderr}`,
+    };
+  }
+
+  // 4. capture sha
+  const sha = await gitRun(cwd, ["rev-parse", "HEAD"], email, name);
+  return {
+    attempted: true,
+    committed: true,
+    hadChanges: true,
+    commitSha: sha.code === 0 ? sha.stdout.trim().slice(0, 12) : null,
+    stderr: "",
+  };
+}
 
 export interface ExecuteRunInput {
   prompt: string;
   model?: string;
   provider?: string;
+  persona?: PersonaResolution;
+  workspace?: ProjectWorkspace | null;
+  ticketIdentifier?: string;
   paperclip?: {
     client: PaperclipClient;
     issueId: string;
   };
+  quotaClient?: QuotaClient;
+  task?: "trivial" | "bug-fix" | "small-feature" | "critical" | "large-context";
 }
 
 export interface ExecuteRunResult {
   exitCode: number;
   output: string;
   durationMs: number;
+  mode: "direct-cli" | "hermes-oneshot" | "hermes-fallback";
 }
 
-/**
- * Logica unica de "ejecutar una tarea" compartida entre CLI mode y server mode.
- * Si hay context de Paperclip, marca in_progress -> ejecuta -> postea comment +
- * marca done/failed.
- */
+const KNOWN_CLIS: ReadonlyArray<SupportedCli> = [
+  "claude",
+  "codex",
+  "agy",
+  "opencode",
+];
+
+function asCli(name: string | undefined): SupportedCli | null {
+  if (!name) return null;
+  return KNOWN_CLIS.includes(name as SupportedCli)
+    ? (name as SupportedCli)
+    : null;
+}
+
 export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResult> {
   const start = Date.now();
   const pc = input.paperclip;
@@ -30,27 +179,208 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     try {
       await pc.client.updateStatus(pc.issueId, "in_progress");
     } catch (e) {
-      process.stderr.write(`updateStatus(in_progress) warn: ${(e as Error).message}\n`);
+      process.stderr.write(
+        `updateStatus(in_progress) warn: ${(e as Error).message}\n`,
+      );
     }
   }
 
-  const { exitCode, stdout, stderr } = await runHermesOneshotCaptured({
-    prompt: input.prompt,
-    model: input.model,
-    provider: input.provider,
-  });
+  // Estrategia de ejecucion:
+  //   1) Si hay persona + CLI conocida: spawnear esa CLI DIRECTAMENTE
+  //      (Hermes brain saltea — la CLI es agente nativo y ejecuta tools por su cuenta).
+  //   2) Si hay persona pero CLI desconocida: cae a Hermes oneshot con persona prompt.
+  //   3) Si no hay persona: Hermes oneshot crudo (CLI mode tradicional del bridge).
+  //
+  // Quota-aware override (R3): si quotaClient esta presente + hay persona, consultamos
+  // /select antes del spawn. El Quota Manager elige preferred/fallback/survival segun
+  // budgets reales. Si responde null (caido o pass-through) usamos el preferred del registry.
+  let effectiveCli = input.persona?.preferredModel?.cli;
+  let effectiveModel = input.persona?.preferredModel?.model;
+  let effectiveProvider: string | undefined;
+  let quotaReason: string | undefined;
+
+  if (input.quotaClient?.isEnabled() && input.persona) {
+    const candidates = buildCandidates(
+      input.persona.preferredModel,
+      input.persona.fallbackChain,
+    );
+    if (candidates.length > 0) {
+      const result = await input.quotaClient.selectModel({
+        role: input.persona.registryId,
+        task: input.task,
+        candidates,
+      });
+      if (result) {
+        effectiveCli = result.chosen.cli;
+        effectiveModel = result.chosen.model;
+        effectiveProvider = result.chosen.provider;
+        quotaReason = result.reason;
+        if (result.reason !== "preferred") {
+          process.stderr.write(
+            `[quota] persona=${input.persona.registryId} routed to ${result.chosen.cli}/${result.chosen.model} (${result.reason}${result.survivalActive ? ", survival" : ""})\n`,
+          );
+        }
+      }
+    }
+  }
+  if (!effectiveProvider && effectiveCli) {
+    effectiveProvider = inferProvider(effectiveCli, effectiveModel);
+  }
+
+  const cli = asCli(effectiveCli);
+
+  let exitCode: number;
+  let output: string;
+  let stderr: string;
+  let mode: ExecuteRunResult["mode"];
+
+  // Memory retrieval: si hay persona + memorias previas, las inyectamos como
+  // contexto de continuidad antes de la tarea actual.
+  let memoryBlock = "";
+  if (input.persona) {
+    try {
+      const mems = await retrieveRelatedMemories(
+        input.persona.registryId,
+        input.prompt,
+        { projectId: input.workspace ? undefined : undefined, limit: 3 },
+      );
+      if (mems.length > 0) {
+        memoryBlock = formatMemoriesForPrompt(mems);
+        process.stderr.write(
+          `[memory] retrieved ${mems.length} memories for ${input.persona.registryId} (top score ${mems[0]?.score?.toFixed(2)})\n`,
+        );
+      }
+    } catch (e) {
+      process.stderr.write(`[memory] retrieve warn: ${(e as Error).message}\n`);
+    }
+  }
+
+  if (input.persona && cli) {
+    mode = "direct-cli";
+    const baseDirectPrompt = buildDirectCliPrompt({
+      agentName: input.persona.agentName,
+      registryId: input.persona.registryId,
+      department: input.persona.department,
+      rolePersonality: input.persona.systemPrompt,
+      workspaceCwd: input.workspace?.cwd,
+      workspaceName: input.workspace?.projectName,
+      task: input.prompt,
+    });
+    const directPrompt = memoryBlock
+      ? `${memoryBlock}\n\n---\n\n${baseDirectPrompt}`
+      : baseDirectPrompt;
+    const result = await invokeCli({
+      cli,
+      model: effectiveModel,
+      prompt: directPrompt,
+      cwd: input.workspace?.cwd,
+    });
+    exitCode = result.exitCode;
+    output = result.stdout.trim();
+    stderr = result.stderr;
+    process.stderr.write(
+      `[direct-cli ${cli}${quotaReason ? ` ${quotaReason}` : ""}] ${result.command}\n`,
+    );
+  } else {
+    mode = input.persona ? "hermes-fallback" : "hermes-oneshot";
+    const finalPrompt = input.persona
+      ? buildPersonaPrompt(input.persona, input.prompt, input.workspace)
+      : input.prompt;
+    const result = await runHermesOneshotCaptured({
+      prompt: finalPrompt,
+      model: input.model,
+      provider: input.provider,
+      cwd: input.workspace?.cwd,
+    });
+    exitCode = result.exitCode;
+    output = result.stdout.trim();
+    stderr = result.stderr;
+  }
 
   const durationMs = Date.now() - start;
-  const output = stdout.trim();
+
+  // Quota record (R3): registramos el uso para el provider efectivo + cli.
+  // costUsd=0 placeholder por ahora — las CLIs subscripcion (claude-code Max,
+  // codex Pro, agy preview) no emiten cost; los budgets caen al `requests`.
+  // Captura real de costo para opencode/API providers = T3.5 (parsing).
+  if (input.quotaClient?.isEnabled() && effectiveProvider && effectiveCli) {
+    void input.quotaClient
+      .recordUsage({
+        provider: effectiveProvider,
+        cli: effectiveCli,
+        costUsd: 0,
+        requests: 1,
+        model: effectiveModel,
+        agentRegistryId: input.persona?.registryId,
+        ticketId: input.ticketIdentifier ?? pc?.issueId,
+      })
+      .catch((e) =>
+        process.stderr.write(`[quota] recordUsage warn: ${(e as Error).message}\n`),
+      );
+  }
+
+  // Memory store: si el run fue OK + hay persona, guardamos lo aprendido
+  if (exitCode === 0 && input.persona && pc) {
+    try {
+      const memText = [
+        `Ticket: ${input.ticketIdentifier ?? pc.issueId}`,
+        `Tarea original:`,
+        input.prompt.slice(0, 1500),
+        ``,
+        `Mi resultado (${input.persona.agentName} via ${mode}):`,
+        output.slice(0, 1500) || "(sin output)",
+      ].join("\n");
+      const stored = await storeMemory({
+        registryId: input.persona.registryId,
+        ticketId: pc.issueId,
+        ticketIdentifier: input.ticketIdentifier,
+        projectId: input.workspace?.projectName,
+        text: memText,
+      });
+      process.stderr.write(
+        `[memory] store ${input.persona.registryId} ticket=${input.ticketIdentifier ?? "?"} -> ${stored ? "OK" : "fail"}\n`,
+      );
+    } catch (e) {
+      process.stderr.write(`[memory] store error: ${(e as Error).message}\n`);
+    }
+  }
+
+  // Auto-commit en el workspace si la ejecucion fue OK + hay workspace + hubo cambios
+  let commitInfo: CommitResult | null = null;
+  if (exitCode === 0 && input.workspace && input.persona) {
+    try {
+      commitInfo = await autoCommitWorkspace(
+        input.workspace,
+        input.persona,
+        input.ticketIdentifier ?? "task",
+        input.ticketIdentifier,
+      );
+      process.stderr.write(
+        `[auto-commit] persona=${input.persona.registryId} hadChanges=${commitInfo.hadChanges} committed=${commitInfo.committed} sha=${commitInfo.commitSha ?? "-"}${commitInfo.stderr ? " err=" + commitInfo.stderr.slice(0, 200) : ""}\n`,
+      );
+    } catch (e) {
+      process.stderr.write(`auto-commit error: ${(e as Error).message}\n`);
+    }
+  }
 
   if (pc) {
-    const finalStatus: "done" | "failed" = exitCode === 0 ? "done" : "failed";
+    const finalStatus: "done" | "blocked" = exitCode === 0 ? "done" : "blocked";
+    const personaTag = input.persona
+      ? `\n\n_(${input.persona.agentName} via ${mode})_`
+      : "";
+    const commitTag = commitInfo?.committed
+      ? `\n\n**Auto-commit**: \`${commitInfo.commitSha}\` (${input.workspace?.projectName})`
+      : commitInfo?.attempted && !commitInfo.hadChanges
+        ? `\n\n_(sin cambios en workspace, no commit)_`
+        : "";
     const commentBody =
       exitCode === 0
-        ? output ||
-          "(Hermes termino correctamente pero sin output. Posible task tipo no-op.)"
-        : `**Hermes fallo** (exit ${exitCode})\n\n` +
-          (output ? `\`\`\`\n${output}\n\`\`\`\n\n` : "") +
+        ? (output ||
+            "(termino correctamente pero sin output. Verificar si genero archivos.)") +
+          personaTag +
+          commitTag
+        : `**Ejecucion fallo** (exit ${exitCode}, mode=${mode})${personaTag}\n\n` +
+          (output ? `\`\`\`\n${output.slice(0, 4000)}\n\`\`\`\n\n` : "") +
           (stderr.trim()
             ? `**stderr**\n\`\`\`\n${stderr.trim().slice(0, 4000)}\n\`\`\``
             : "");
@@ -63,11 +393,12 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     try {
       await pc.client.updateStatus(pc.issueId, finalStatus);
     } catch (e) {
-      process.stderr.write(`updateStatus(${finalStatus}) warn: ${(e as Error).message}\n`);
+      process.stderr.write(
+        `updateStatus(${finalStatus}) warn: ${(e as Error).message}\n`,
+      );
     }
-    // Best-effort cost reporting (R4 lo hara como ciudadano de primera)
     void pc.client.reportCost(pc.issueId, {});
   }
 
-  return { exitCode, output, durationMs };
+  return { exitCode, output, durationMs, mode };
 }

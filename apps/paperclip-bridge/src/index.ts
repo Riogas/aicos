@@ -73,9 +73,14 @@ async function main(): Promise<number> {
       port,
       paperclipApiUrl: process.env.PAPERCLIP_API_URL,
       paperclipApiKey: process.env.PAPERCLIP_API_KEY,
+      quotaServiceUrl: process.env.QUOTA_SERVICE_URL,
     });
     app.log.info(
-      { port, paperclipConfigured: Boolean(process.env.PAPERCLIP_API_URL) },
+      {
+        port,
+        paperclipConfigured: Boolean(process.env.PAPERCLIP_API_URL),
+        quotaConfigured: Boolean(process.env.QUOTA_SERVICE_URL),
+      },
       "aicos-bridge listening",
     );
     return -1; // sentinela: nunca termina por su cuenta

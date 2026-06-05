@@ -1,6 +1,7 @@
 .env
 .env.local
 .env.bridge
+.env.quota
 .secrets/
 *.log
 node_modules/

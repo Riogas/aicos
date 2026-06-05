@@ -4,6 +4,7 @@ export interface OneshotOptions {
   prompt: string;
   model?: string;
   provider?: string;
+  cwd?: string;
 }
 
 export interface OneshotCaptureResult {
@@ -27,6 +28,7 @@ export function runHermesOneshot(opts: OneshotOptions): Promise<number> {
   return new Promise((resolve) => {
     const proc = spawn("hermes", buildArgs(opts), {
       stdio: ["ignore", "inherit", "inherit"],
+      cwd: opts.cwd,
     });
     proc.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
@@ -58,6 +60,7 @@ export function runHermesOneshotCaptured(
   return new Promise((resolve) => {
     const proc = spawn("hermes", buildArgs(opts), {
       stdio: ["ignore", "pipe", "pipe"],
+      cwd: opts.cwd,
     });
 
     let stdout = "";
