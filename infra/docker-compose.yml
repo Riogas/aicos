@@ -1,9 +1,9 @@
-# AICOS — Stack base (R2a + R2b)
-# Levanta Postgres + Redis + Qdrant + Paperclip. Servicios propios (R3+) se agregan después.
+# AICOS — Stack base (R2a + R2b + R3)
+# Levanta Postgres + Redis + Qdrant + Paperclip + Quota Manager.
 # Uso: cd ~/aicos && docker compose -f infra/docker-compose.yml up -d
 #
-# Acceso desde la red Docker:  postgres / redis / qdrant / paperclip
-# Acceso desde el host (WSL):  localhost:5432 / :6379 / :6333 / :3100
+# Acceso desde la red Docker:  postgres / redis / qdrant / paperclip / aicos-quota-manager
+# Acceso desde el host (WSL):  localhost:5432 / :6379 / :6333 / :3100 / :7001
 
 services:
   postgres:
@@ -97,6 +97,31 @@ services:
       timeout: 5s
       retries: 12
       start_period: 60s
+
+  aicos-quota-manager:
+    build:
+      context: ..
+      dockerfile: services/aicos-quota-manager/Dockerfile
+    image: aicos/quota-manager:local
+    container_name: aicos-quota-manager
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUOTA_PORT: "7001"
+      QUOTA_ENABLED: "true"
+      LOG_LEVEL: info
+      # QUOTA_BUDGETS_FILE: /etc/aicos/budgets.json   # optional override
+    ports:
+      - "7001:7001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:7001/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   postgres-data:
