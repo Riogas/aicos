@@ -12,6 +12,7 @@ import {
 } from "./memory.js";
 import type { QuotaClient } from "./quota-client.js";
 import { buildCandidates, inferProvider } from "./provider-map.js";
+import type { LearningClient } from "./learning-client.js";
 
 interface CommitResult {
   attempted: boolean;
@@ -147,6 +148,7 @@ export interface ExecuteRunInput {
     issueId: string;
   };
   quotaClient?: QuotaClient;
+  learningClient?: LearningClient;
   task?: "trivial" | "bug-fix" | "small-feature" | "critical" | "large-context";
 }
 
@@ -321,6 +323,28 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
       })
       .catch((e) =>
         process.stderr.write(`[quota] recordUsage warn: ${(e as Error).message}\n`),
+      );
+  }
+
+  // Learning outcome (R8): registramos el resultado de la corrida para que
+  // el Quota Manager (en el futuro) consulte /best-for y elija providers segun
+  // historico de success_rate × cost. Fire-and-forget — no bloquea el run.
+  if (input.learningClient?.isEnabled() && effectiveProvider && effectiveCli && effectiveModel) {
+    void input.learningClient
+      .recordOutcome({
+        provider: effectiveProvider,
+        cli: effectiveCli,
+        model: effectiveModel,
+        taskType: input.task ?? "other",
+        success: exitCode === 0,
+        durationMs,
+        costUsd,
+        agentRegistryId: input.persona?.registryId,
+        ticketId: input.ticketIdentifier ?? pc?.issueId,
+        failureReason: exitCode !== 0 ? `exit ${exitCode}` : undefined,
+      })
+      .catch((e) =>
+        process.stderr.write(`[learning] recordOutcome warn: ${(e as Error).message}\n`),
       );
   }
 

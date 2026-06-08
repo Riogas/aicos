@@ -74,12 +74,14 @@ async function main(): Promise<number> {
       paperclipApiUrl: process.env.PAPERCLIP_API_URL,
       paperclipApiKey: process.env.PAPERCLIP_API_KEY,
       quotaServiceUrl: process.env.QUOTA_SERVICE_URL,
+      learningServiceUrl: process.env.LEARNING_SERVICE_URL,
     });
     app.log.info(
       {
         port,
         paperclipConfigured: Boolean(process.env.PAPERCLIP_API_URL),
         quotaConfigured: Boolean(process.env.QUOTA_SERVICE_URL),
+        learningConfigured: Boolean(process.env.LEARNING_SERVICE_URL),
       },
       "aicos-bridge listening",
     );

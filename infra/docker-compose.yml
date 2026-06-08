@@ -147,6 +147,30 @@ services:
       retries: 5
       start_period: 10s
 
+  aicos-learning:
+    build:
+      context: ..
+      dockerfile: services/aicos-learning/Dockerfile
+    image: aicos/learning:local
+    container_name: aicos-learning
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      LEARNING_PORT: "7003"
+      LEARNING_ENABLED: "true"
+      LOG_LEVEL: info
+    ports:
+      - "7003:7003"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:7003/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
 volumes:
   postgres-data:
   redis-data:

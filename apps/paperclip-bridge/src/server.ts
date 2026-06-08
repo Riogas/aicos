@@ -10,6 +10,7 @@ import {
 } from "./registry.js";
 import type { ProjectWorkspace } from "./registry.js";
 import { createQuotaClient } from "./quota-client.js";
+import { createLearningClient } from "./learning-client.js";
 
 const RunRequestSchema = z.object({
   issueId: z.string().optional(),
@@ -29,6 +30,7 @@ export interface ServerOptions {
   paperclipApiUrl?: string;
   paperclipApiKey?: string;
   quotaServiceUrl?: string;
+  learningServiceUrl?: string;
 }
 
 export async function startServer(opts: ServerOptions): Promise<FastifyInstance> {
@@ -50,9 +52,15 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     Boolean(opts.paperclipApiUrl) && Boolean(opts.paperclipApiKey);
 
   const quotaClient = createQuotaClient(opts.quotaServiceUrl);
+  const learningClient = createLearningClient(opts.learningServiceUrl);
   app.log.info(
-    { quotaEnabled: quotaClient.isEnabled(), url: opts.quotaServiceUrl ?? null },
-    "quota client init",
+    {
+      quotaEnabled: quotaClient.isEnabled(),
+      quotaUrl: opts.quotaServiceUrl ?? null,
+      learningEnabled: learningClient.isEnabled(),
+      learningUrl: opts.learningServiceUrl ?? null,
+    },
+    "client init",
   );
 
   app.get("/health", async () => ({
@@ -61,6 +69,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     version: "0.3.0",
     paperclip: paperclipReady ? "configured" : "missing",
     quota: quotaClient.isEnabled() ? "configured" : "missing",
+    learning: learningClient.isEnabled() ? "configured" : "missing",
     hermes: "spawned-on-demand",
     registry: {
       loaded: registryStats.registryLoaded && registryStats.keysLoaded,
@@ -202,6 +211,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
                 ? { client: pcClient, issueId }
                 : undefined,
             quotaClient,
+            learningClient,
           });
           app.log.info(
             {
