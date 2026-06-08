@@ -1,0 +1,23 @@
+[Unit]
+Description=AICOS Dashboard — Next.js read-only ops surface
+Documentation=https://github.com/aicos
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/aicos/apps/dashboard
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PORT=3000
+Environment=QUOTA_SERVICE_URL=http://localhost:7001
+Environment=POLICY_SERVICE_URL=http://localhost:7002
+Environment=LEARNING_SERVICE_URL=http://localhost:7003
+Environment=BRIDGE_SERVICE_URL=http://localhost:7100
+ExecStart=%h/.local/bin/node %h/aicos/apps/dashboard/.next/standalone/apps/dashboard/server.js
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
