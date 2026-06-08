@@ -233,6 +233,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   let output: string;
   let stderr: string;
   let mode: ExecuteRunResult["mode"];
+  let costUsd = 0;
+  let tokens: { input?: number; output?: number; cached?: number } | undefined;
 
   // Memory retrieval: si hay persona + memorias previas, las inyectamos como
   // contexto de continuidad antes de la tarea actual.
@@ -276,10 +278,13 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
       cwd: input.workspace?.cwd,
     });
     exitCode = result.exitCode;
-    output = result.stdout.trim();
+    // Preferimos parsedText (texto limpio del CLI structured output) sobre stdout crudo.
+    output = (result.parsedText ?? result.stdout).trim();
     stderr = result.stderr;
+    if (result.costUsd !== undefined) costUsd = result.costUsd;
+    if (result.tokens) tokens = result.tokens;
     process.stderr.write(
-      `[direct-cli ${cli}${quotaReason ? ` ${quotaReason}` : ""}] ${result.command}\n`,
+      `[direct-cli ${cli}${quotaReason ? ` ${quotaReason}` : ""}${result.costUsd !== undefined ? ` $${result.costUsd.toFixed(4)}` : ""}] ${result.command}\n`,
     );
   } else {
     mode = input.persona ? "hermes-fallback" : "hermes-oneshot";
@@ -299,17 +304,17 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
 
   const durationMs = Date.now() - start;
 
-  // Quota record (R3): registramos el uso para el provider efectivo + cli.
-  // costUsd=0 placeholder por ahora — las CLIs subscripcion (claude-code Max,
-  // codex Pro, agy preview) no emiten cost; los budgets caen al `requests`.
-  // Captura real de costo para opencode/API providers = T3.5 (parsing).
+  // Quota record (R3 + R3.5): registramos uso real con cost/tokens parseados
+  // del structured output del CLI. Si el CLI no emite cost (codex/agy o
+  // parsing falla), cae a costUsd=0 y solo cuenta el request.
   if (input.quotaClient?.isEnabled() && effectiveProvider && effectiveCli) {
     void input.quotaClient
       .recordUsage({
         provider: effectiveProvider,
         cli: effectiveCli,
-        costUsd: 0,
+        costUsd,
         requests: 1,
+        tokens,
         model: effectiveModel,
         agentRegistryId: input.persona?.registryId,
         ticketId: input.ticketIdentifier ?? pc?.issueId,

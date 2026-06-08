@@ -18,6 +18,7 @@
     "dev": "tsx src/index.ts",
     "serve:dev": "tsx src/index.ts --serve",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@types/node": "^22.10.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.8"
   }
 }
