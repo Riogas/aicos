@@ -34,6 +34,12 @@ export function inferProvider(cli: string, model?: string): string {
       return "google";
     case "opencode":
       return inferOpencodeProvider(model);
+    case "hermes":
+      // model="provider/modelname" → use provider as billing key.
+      // e.g. "openai/gpt-5.5" → "openai", "anthropic/claude-sonnet-4.6" → "anthropic"
+      if (!model) return "openai";
+      const slash = model.indexOf("/");
+      return slash > 0 ? model.slice(0, slash).toLowerCase() : "openai";
     default:
       return "unknown";
   }

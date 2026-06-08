@@ -11,6 +11,12 @@ import {
 import type { ProjectWorkspace } from "./registry.js";
 import { createQuotaClient } from "./quota-client.js";
 import { createLearningClient } from "./learning-client.js";
+import {
+  storeMemory,
+  retrieveFromScope,
+  retrieveAllScopes,
+  type MemoryScope,
+} from "./memory.js";
 
 const RunRequestSchema = z.object({
   issueId: z.string().optional(),
@@ -82,6 +88,58 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     app.log.info(s, "registry reloaded");
     return { ok: true, ...s };
   });
+
+  // ─── L4 Memory endpoints ─────────────────────────────────────────────────
+  const MemoryStoreSchema = z.object({
+    scope: z.enum(["agent", "project", "company", "market"]),
+    text: z.string().min(1),
+    summary: z.string().optional(),
+    registryId: z.string().optional(),
+    projectId: z.string().optional(),
+    ticketId: z.string().optional(),
+    ticketIdentifier: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+  });
+
+  app.post("/memory/store", async (req, reply) => {
+    const r = MemoryStoreSchema.safeParse(req.body);
+    if (!r.success) {
+      reply.code(400);
+      return { error: "validation", details: r.error.issues };
+    }
+    const ok = await storeMemory(r.data);
+    return { ok, scope: r.data.scope };
+  });
+
+  const MemorySearchSchema = z.object({
+    query: z.string().min(1),
+    scope: z.enum(["agent", "project", "company", "market", "all"]).optional(),
+    registryId: z.string().optional(),
+    projectId: z.string().optional(),
+    limit: z.coerce.number().int().positive().max(20).optional(),
+  });
+
+  app.post("/memory/search", async (req, reply) => {
+    const r = MemorySearchSchema.safeParse(req.body);
+    if (!r.success) {
+      reply.code(400);
+      return { error: "validation", details: r.error.issues };
+    }
+    const { query, scope, registryId, projectId, limit } = r.data;
+    if (!scope || scope === "all") {
+      return {
+        items: await retrieveAllScopes(query, { registryId, projectId, perScopeLimit: limit ?? 3 }),
+      };
+    }
+    return {
+      items: await retrieveFromScope(scope as MemoryScope, query, {
+        registryId,
+        projectId,
+        limit: limit ?? 5,
+      }),
+    };
+  });
+
 
   app.post(
     "/run",

@@ -62,9 +62,10 @@ export type SelectQuery = z.infer<typeof selectQuerySchema>;
 
 export interface SelectResult {
   chosen: Candidate;
-  reason: "preferred" | "fallback" | "survival" | "first-when-disabled";
+  reason: "preferred" | "fallback" | "survival" | "smart" | "first-when-disabled";
   survivalActive: boolean;
   skipped: Array<{ candidate: Candidate; reason: string }>;
+  smartRoutingActive?: boolean;
 }
 
 export interface ProviderState {

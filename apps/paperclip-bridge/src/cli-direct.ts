@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-export type SupportedCli = "claude" | "codex" | "agy" | "opencode";
+export type SupportedCli = "claude" | "codex" | "agy" | "opencode" | "hermes";
 
 export interface CliInvocationOptions {
   cli: SupportedCli;
@@ -53,6 +53,22 @@ function buildArgs(opts: CliInvocationOptions): string[] {
       args.push(opts.prompt);
       return args;
     }
+    case "hermes": {
+      // L1 integration (R5 spec): Hermes-Nous as brain. -z mode emits only the
+      // final text. opts.model is "provider/model" (e.g. "openai/gpt-5.5"); if
+      // present, split into -m / --provider.
+      const args = ["-z", opts.prompt, "--yolo"];
+      if (opts.model) {
+        const slash = opts.model.indexOf("/");
+        if (slash > 0) {
+          args.push("--provider", opts.model.slice(0, slash));
+          args.push("-m", opts.model.slice(slash + 1));
+        } else {
+          args.push("-m", opts.model);
+        }
+      }
+      return args;
+    }
   }
 }
 
@@ -74,6 +90,10 @@ function parseOutput(
         return parseCodexJsonl(stdout);
       case "opencode":
         return parseOpencodeNdjson(stdout);
+      case "hermes":
+        // -z mode emits ONLY the final response text. No cost in output —
+        // request count is the meaningful unit for hermes routing.
+        return { parsedText: stdout.trim() };
       case "agy":
         return {};
     }

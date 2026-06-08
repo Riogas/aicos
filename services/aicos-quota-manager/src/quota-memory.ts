@@ -10,6 +10,7 @@ import type {
   Snapshot,
   UsageInput,
 } from "./types.js";
+import type { LearningClient } from "./learning-client.js";
 
 interface WindowCounter {
   cost: number;
@@ -32,10 +33,14 @@ export class InMemoryQuotaManager implements QuotaManager {
   private providers = new Map<string, WindowCounter>();
   private clis = new Map<string, WindowCounter>();
   private down = new Map<string, DownMarker>();
+  public learningClient?: LearningClient;
   constructor(
     private readonly budgets: Budgets,
     private readonly now: () => number = Date.now,
-  ) {}
+    learningClient?: LearningClient,
+  ) {
+    this.learningClient = learningClient;
+  }
 
   private getOrInit(map: Map<string, WindowCounter>, name: string, windowSec: number): WindowCounter {
     const t = this.now();
@@ -163,27 +168,49 @@ export class InMemoryQuotaManager implements QuotaManager {
   }
 
   async selectModel(query: SelectQuery): Promise<SelectResult> {
-    return selectModelCore(query, this);
+    return selectModelCore(query, this, this.learningClient);
   }
 }
 
 /**
  * Shared select algorithm: works against ANY QuotaManager. Applies hard rules
  * first, then survival overlay, then preferred/fallback order.
+ *
+ * L7 SMART ROUTING v3: if `learningClient` is provided and `query.task` set,
+ * consults learning /best-for and re-orders candidates by learned score
+ * BEFORE applying availability. Survival models always go first regardless
+ * (they're a safety mechanism, not a quality choice).
  */
 export async function selectModelCore(
   query: SelectQuery,
   mgr: QuotaManager,
+  learningClient?: LearningClient,
 ): Promise<SelectResult> {
   const skipped: Array<{ candidate: Candidate; reason: string }> = [];
   const survival = await mgr.survivalActive();
 
+  // Smart routing: re-order query.candidates by learning score when available.
+  let smartOrdered: Candidate[] = query.candidates;
+  let smartSource: "data" | undefined;
+  if (learningClient?.isEnabled() && query.task) {
+    const best = await learningClient.bestFor(query.task);
+    if (best && best.source === "data" && best.candidates.length > 0) {
+      const scoreMap = new Map<string, number>();
+      for (const c of best.candidates) {
+        scoreMap.set(`${c.cli}|${c.model}`, c.score);
+      }
+      smartOrdered = [...query.candidates].sort((a, b) => {
+        const sa = scoreMap.get(`${a.cli}|${a.model}`) ?? -1;
+        const sb = scoreMap.get(`${b.cli}|${b.model}`) ?? -1;
+        return sb - sa;
+      });
+      smartSource = "data";
+    }
+  }
+
   const order = survival
-    ? [
-        ...(await getSurvivalCandidates(mgr)),
-        ...query.candidates,
-      ]
-    : query.candidates;
+    ? [...(await getSurvivalCandidates(mgr)), ...smartOrdered]
+    : smartOrdered;
 
   for (const cand of order) {
     const ruleViolation = applyHardRules(cand, query);
@@ -201,16 +228,24 @@ export async function selectModelCore(
       skipped.push({ candidate: cand, reason: `cli ${cand.cli}: ${cliAvail.reason}` });
       continue;
     }
-    const reason = survival && order.indexOf(cand) < (await getSurvivalCandidates(mgr)).length
+    const survivalCount = (await getSurvivalCandidates(mgr)).length;
+    const isFromSurvival = survival && order.indexOf(cand) < survivalCount;
+    const isPreferred =
+      query.candidates[0]?.provider === cand.provider &&
+      query.candidates[0]?.model === cand.model;
+    const reason: SelectResult["reason"] = isFromSurvival
       ? "survival"
-      : query.candidates[0]?.provider === cand.provider && query.candidates[0]?.model === cand.model
-        ? "preferred"
-        : "fallback";
+      : smartSource && !isPreferred
+        ? "smart"
+        : isPreferred
+          ? "preferred"
+          : "fallback";
     return {
       chosen: cand,
-      reason: reason as SelectResult["reason"],
+      reason,
       survivalActive: survival,
       skipped,
+      smartRoutingActive: Boolean(smartSource),
     };
   }
 

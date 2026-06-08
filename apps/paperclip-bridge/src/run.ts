@@ -6,7 +6,7 @@ import { buildPersonaPrompt } from "./registry.js";
 import { invokeCli, buildDirectCliPrompt } from "./cli-direct.js";
 import type { SupportedCli } from "./cli-direct.js";
 import {
-  retrieveRelatedMemories,
+  retrieveAllScopes,
   storeMemory,
   formatMemoriesForPrompt,
 } from "./memory.js";
@@ -164,6 +164,7 @@ const KNOWN_CLIS: ReadonlyArray<SupportedCli> = [
   "codex",
   "agy",
   "opencode",
+  "hermes",
 ];
 
 function asCli(name: string | undefined): SupportedCli | null {
@@ -238,20 +239,24 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   let costUsd = 0;
   let tokens: { input?: number; output?: number; cached?: number } | undefined;
 
-  // Memory retrieval: si hay persona + memorias previas, las inyectamos como
-  // contexto de continuidad antes de la tarea actual.
+  // Memory retrieval (L4 — 4 scopes): agent (este worker), project (workspace),
+  // company + market (global). Inyectados como contexto al prompt.
   let memoryBlock = "";
   if (input.persona) {
     try {
-      const mems = await retrieveRelatedMemories(
-        input.persona.registryId,
-        input.prompt,
-        { projectId: input.workspace ? undefined : undefined, limit: 3 },
-      );
+      const mems = await retrieveAllScopes(input.prompt, {
+        registryId: input.persona.registryId,
+        projectId: input.workspace?.projectName,
+        perScopeLimit: 2,
+      });
       if (mems.length > 0) {
         memoryBlock = formatMemoriesForPrompt(mems);
+        const byScope = mems.reduce<Record<string, number>>((acc, m) => {
+          acc[m.scope] = (acc[m.scope] ?? 0) + 1;
+          return acc;
+        }, {});
         process.stderr.write(
-          `[memory] retrieved ${mems.length} memories for ${input.persona.registryId} (top score ${mems[0]?.score?.toFixed(2)})\n`,
+          `[memory] retrieved ${mems.length} (${Object.entries(byScope).map(([s, n]) => `${s}:${n}`).join(", ")}) for ${input.persona.registryId}\n`,
         );
       }
     } catch (e) {
@@ -348,26 +353,47 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
       );
   }
 
-  // Memory store: si el run fue OK + hay persona, guardamos lo aprendido
+  // Memory store (L4 — 2 scopes paralelos):
+  //   agent → individual run record (este worker en este ticket)
+  //   project → SOLO si hay workspace, registra que sucedio en el proyecto
+  // Company / Market se escriben aparte por roles especificos (research, strategy).
   if (exitCode === 0 && input.persona && pc) {
-    try {
-      const memText = [
-        `Ticket: ${input.ticketIdentifier ?? pc.issueId}`,
-        `Tarea original:`,
-        input.prompt.slice(0, 1500),
-        ``,
-        `Mi resultado (${input.persona.agentName} via ${mode}):`,
-        output.slice(0, 1500) || "(sin output)",
-      ].join("\n");
-      const stored = await storeMemory({
+    const memText = [
+      `Ticket: ${input.ticketIdentifier ?? pc.issueId}`,
+      `Tarea original:`,
+      input.prompt.slice(0, 1500),
+      ``,
+      `Mi resultado (${input.persona.agentName} via ${mode}):`,
+      output.slice(0, 1500) || "(sin output)",
+    ].join("\n");
+    const stores: Promise<boolean>[] = [
+      storeMemory({
+        scope: "agent",
         registryId: input.persona.registryId,
         ticketId: pc.issueId,
         ticketIdentifier: input.ticketIdentifier,
         projectId: input.workspace?.projectName,
         text: memText,
-      });
+      }),
+    ];
+    if (input.workspace) {
+      stores.push(
+        storeMemory({
+          scope: "project",
+          projectId: input.workspace.projectName,
+          ticketId: pc.issueId,
+          ticketIdentifier: input.ticketIdentifier,
+          registryId: input.persona.registryId,
+          text: memText,
+          tags: [input.persona.department, input.persona.registryId],
+        }),
+      );
+    }
+    try {
+      const results = await Promise.all(stores);
+      const ok = results.filter(Boolean).length;
       process.stderr.write(
-        `[memory] store ${input.persona.registryId} ticket=${input.ticketIdentifier ?? "?"} -> ${stored ? "OK" : "fail"}\n`,
+        `[memory] stored ${ok}/${results.length} scopes for ${input.persona.registryId} ticket=${input.ticketIdentifier ?? "?"}\n`,
       );
     } catch (e) {
       process.stderr.write(`[memory] store error: ${(e as Error).message}\n`);

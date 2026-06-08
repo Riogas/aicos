@@ -11,6 +11,7 @@ import type {
   UsageInput,
 } from "./types.js";
 import { selectModelCore } from "./quota-memory.js";
+import type { LearningClient } from "./learning-client.js";
 
 /**
  * Redis-backed QuotaManager. Safe across multiple worker processes.
@@ -28,8 +29,10 @@ import { selectModelCore } from "./quota-memory.js";
 export class RedisQuotaManager implements QuotaManager {
   // Expose budgets so selectModelCore can read survivalModels.
   public readonly budgets: Budgets;
-  constructor(private readonly redis: Redis, budgets: Budgets) {
+  public learningClient?: LearningClient;
+  constructor(private readonly redis: Redis, budgets: Budgets, learningClient?: LearningClient) {
     this.budgets = budgets;
+    this.learningClient = learningClient;
   }
 
   private providerCostKey(provider: string): string {
@@ -183,6 +186,6 @@ export class RedisQuotaManager implements QuotaManager {
   }
 
   async selectModel(query: SelectQuery): Promise<SelectResult> {
-    return selectModelCore(query, this);
+    return selectModelCore(query, this, this.learningClient);
   }
 }

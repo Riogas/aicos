@@ -2,6 +2,7 @@ import IORedis from "ioredis";
 import { loadBudgets } from "./budgets.js";
 import { InMemoryQuotaManager } from "./quota-memory.js";
 import { RedisQuotaManager } from "./quota-redis.js";
+import { createLearningClient } from "./learning-client.js";
 import { startServer } from "./server.js";
 
 const VERSION = "0.1.0";
@@ -56,13 +57,17 @@ async function main(): Promise<number> {
   const budgets = loadBudgets(process.env.QUOTA_BUDGETS_FILE);
   const quotaEnabled = (process.env.QUOTA_ENABLED ?? "true").toLowerCase() !== "false";
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const smartRoutingEnabled = (process.env.SMART_ROUTING ?? "true").toLowerCase() !== "false";
+  const learningClient = createLearningClient(
+    smartRoutingEnabled ? process.env.LEARNING_SERVICE_URL : undefined,
+  );
 
   let manager;
   let cleanup: (() => Promise<void>) | undefined;
 
   if (redisUrl === "memory") {
     process.stderr.write("[quota] using in-memory manager (REDIS_URL=memory)\n");
-    manager = new InMemoryQuotaManager(budgets);
+    manager = new InMemoryQuotaManager(budgets, undefined, learningClient);
   } else {
     const redis = new IORedis(redisUrl, {
       maxRetriesPerRequest: 3,
@@ -74,7 +79,7 @@ async function main(): Promise<number> {
       redis.once("ready", () => resolve());
       redis.once("error", () => resolve()); // even on error, server still starts
     });
-    manager = new RedisQuotaManager(redis, budgets);
+    manager = new RedisQuotaManager(redis, budgets, learningClient);
     cleanup = async () => {
       try {
         await redis.quit();
@@ -89,6 +94,7 @@ async function main(): Promise<number> {
     {
       port,
       quotaEnabled,
+      smartRouting: learningClient.isEnabled() ? "enabled" : "disabled",
       criticalProvider: budgets.criticalProvider,
       providers: Object.keys(budgets.providers),
       clis: Object.keys(budgets.clis),
