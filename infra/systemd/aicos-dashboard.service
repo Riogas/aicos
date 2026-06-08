@@ -12,6 +12,9 @@ Environment=QUOTA_SERVICE_URL=http://localhost:7001
 Environment=POLICY_SERVICE_URL=http://localhost:7002
 Environment=LEARNING_SERVICE_URL=http://localhost:7003
 Environment=BRIDGE_SERVICE_URL=http://localhost:7100
+# Next standalone mode doesn't auto-include .next/static or public — symlink them
+# before starting. -f makes it idempotent across restarts.
+ExecStartPre=/bin/sh -c 'mkdir -p %h/aicos/apps/dashboard/.next/standalone/apps/dashboard/.next && ln -sfn %h/aicos/apps/dashboard/.next/static %h/aicos/apps/dashboard/.next/standalone/apps/dashboard/.next/static && ln -sfn %h/aicos/apps/dashboard/public %h/aicos/apps/dashboard/.next/standalone/apps/dashboard/public 2>/dev/null || true'
 ExecStart=%h/.local/bin/node %h/aicos/apps/dashboard/.next/standalone/apps/dashboard/server.js
 Restart=on-failure
 RestartSec=5s
