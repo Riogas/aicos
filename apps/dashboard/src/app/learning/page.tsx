@@ -1,23 +1,28 @@
+import { CircleCheck, CircleX, Crown, Sparkles, Trophy } from "lucide-react";
 import { safeFetch, URLS } from "@/lib/fetcher";
-import { Card } from "@/components/Card";
+import { Card, CardEmpty } from "@/components/Card";
+import { Badge, StatusPill } from "@/components/StatusPill";
+import { Bar } from "@/components/Bar";
 
 export const dynamic = "force-dynamic";
 
+interface Candidate {
+  provider: string;
+  cli: string;
+  model: string;
+  total: number;
+  success: number;
+  successRate: number;
+  avgDurationMs: number;
+  avgCostUsd: number;
+  score: number;
+  lastRunAt?: string;
+}
+
 interface BestForResult {
   taskType: string;
-  candidates: Array<{
-    provider: string;
-    cli: string;
-    model: string;
-    total: number;
-    success: number;
-    successRate: number;
-    avgDurationMs: number;
-    avgCostUsd: number;
-    score: number;
-    lastRunAt?: string;
-  }>;
-  best?: BestForResult["candidates"][number];
+  candidates: Candidate[];
+  best?: Candidate;
   totalSamples: number;
   source: "data" | "default";
 }
@@ -44,89 +49,97 @@ export default async function LearningPage() {
 
   if (!summary.ok) {
     return (
-      <Card title="Learning unreachable" accent="err">
-        {summary.error}
+      <Card title="Learning unreachable">
+        <CardEmpty>{summary.error}</CardEmpty>
       </Card>
     );
   }
 
+  const entries = Object.entries(summary.data ?? {});
+  const withData = entries.filter(([, r]) => r.totalSamples > 0);
+  const withoutData = entries.filter(([, r]) => r.totalSamples === 0);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 animate-fade-in">
       <header>
-        <h1 className="text-2xl font-semibold text-white">Learning</h1>
-        <p className="mt-1 text-sm text-muted">Outcome-based provider ranking · best-for per task type</p>
+        <h1 className="text-3xl font-semibold tracking-tightest text-fg">Learning</h1>
+        <p className="mt-1 text-sm text-muted">
+          Outcome-based provider ranking. Score = <code className="text-fg">successRate / (avgCost + ε)</code>.
+          Higher = cheaper × more reliable.
+        </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {Object.entries(summary.data ?? {}).map(([taskType, r]) => (
-          <Card
-            key={taskType}
-            title={taskType}
-            subtitle={`${r.totalSamples} samples · ${r.source}`}
-            accent={r.totalSamples > 0 ? "ok" : undefined}
-          >
-            {r.best ? (
-              <>
-                <div className="font-mono text-xs">
-                  <div className="text-accent">{r.best.cli}/{r.best.model}</div>
-                  <div className="text-muted">provider={r.best.provider}</div>
-                  <div className="mt-2 grid grid-cols-2 gap-1 text-neutral-300">
-                    <span>success: {(r.best.successRate * 100).toFixed(0)}%</span>
-                    <span>avg cost: ${r.best.avgCostUsd.toFixed(4)}</span>
-                    <span>avg ms: {Math.round(r.best.avgDurationMs)}</span>
-                    <span>score: {r.best.score.toFixed(1)}</span>
-                  </div>
-                </div>
-                {r.candidates.length > 1 && (
-                  <div className="mt-3 border-t border-border pt-2 text-xs">
-                    <div className="mb-1 text-muted">other candidates:</div>
-                    <ul className="space-y-0.5 font-mono">
-                      {r.candidates.slice(1).map((c) => (
-                        <li key={`${c.cli}/${c.model}`} className="flex justify-between">
-                          <span className="text-neutral-400">{c.cli}/{c.model}</span>
-                          <span className="text-muted">score={c.score.toFixed(1)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
-            ) : (
-              <span className="text-muted">no data yet (need ≥ 3 samples)</span>
-            )}
-          </Card>
-        ))}
-      </div>
+      {withData.length > 0 && (
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {withData.map(([taskType, r]) => (
+            <BestForCard key={taskType} taskType={taskType} result={r} />
+          ))}
+        </section>
+      )}
 
-      <Card title="Recent outcomes (last 50 today)" subtitle="bridge → learning">
+      {withoutData.length > 0 && (
+        <Card title="Awaiting data" subtitle="need ≥ 3 samples each">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {withoutData.map(([taskType, r]) => (
+              <div
+                key={taskType}
+                className="flex items-center justify-between rounded-md border border-border/40 bg-surface-2 px-3 py-2 text-xs"
+              >
+                <span className="font-mono text-muted">{taskType}</span>
+                <span className="font-mono text-2xs tabular text-subtle">
+                  {r.totalSamples} samples
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card title="Recent outcomes" subtitle="bridge → learning (50 most recent today)">
         {!recent.ok || !recent.data?.items?.length ? (
-          <span className="text-muted">{recent.error ?? "no outcomes today"}</span>
+          <CardEmpty>{recent.error ?? "no outcomes today"}</CardEmpty>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full font-mono text-xs">
-              <thead className="text-left text-muted">
-                <tr>
-                  <th className="py-1 pr-3">ts</th>
-                  <th className="py-1 pr-3">agent</th>
-                  <th className="py-1 pr-3">task</th>
-                  <th className="py-1 pr-3">cli/model</th>
-                  <th className="py-1 pr-3">ok</th>
-                  <th className="py-1 pr-3">ms</th>
-                  <th className="py-1 pr-3">cost</th>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border/60 text-left font-mono text-2xs uppercase tracking-tightest text-subtle">
+                  <th className="py-2 pr-4 font-normal">time</th>
+                  <th className="py-2 pr-4 font-normal">agent</th>
+                  <th className="py-2 pr-4 font-normal">task</th>
+                  <th className="py-2 pr-4 font-normal">cli/model</th>
+                  <th className="py-2 pr-4 font-normal">provider</th>
+                  <th className="py-2 pr-4 font-normal">status</th>
+                  <th className="py-2 pr-4 text-right font-normal">duration</th>
+                  <th className="py-2 pr-4 text-right font-normal">cost</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-border/40">
                 {recent.data.items.map((r, i) => (
-                  <tr key={i} className="border-t border-border">
-                    <td className="py-1 pr-3 text-muted">{(r.ts ?? "").slice(11, 19)}</td>
-                    <td className="py-1 pr-3 text-neutral-300">{r.agentRegistryId ?? "-"}</td>
-                    <td className="py-1 pr-3 text-neutral-400">{r.taskType}</td>
-                    <td className="py-1 pr-3">{r.cli}/{r.model}</td>
-                    <td className="py-1 pr-3">
-                      {r.success ? <span className="text-success">✓</span> : <span className="text-danger">✗</span>}
+                  <tr key={i} className="text-xs transition-colors hover:bg-surface-2">
+                    <td className="py-2 pr-4 font-mono tabular text-subtle">
+                      {(r.ts ?? "").slice(11, 19)}
                     </td>
-                    <td className="py-1 pr-3 text-neutral-400">{r.durationMs}</td>
-                    <td className="py-1 pr-3 text-neutral-400">${r.costUsd.toFixed(4)}</td>
+                    <td className="py-2 pr-4 font-mono text-fg">{r.agentRegistryId ?? "—"}</td>
+                    <td className="py-2 pr-4">
+                      <Badge tone="neutral">{r.taskType}</Badge>
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-muted">
+                      {r.cli}/<span className="text-fg">{r.model.split("/").pop()}</span>
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-subtle">{r.provider}</td>
+                    <td className="py-2 pr-4">
+                      {r.success ? (
+                        <CircleCheck className="h-3.5 w-3.5 text-success" strokeWidth={2.2} />
+                      ) : (
+                        <CircleX className="h-3.5 w-3.5 text-danger" strokeWidth={2.2} />
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-right font-mono tabular text-muted">
+                      {r.durationMs}ms
+                    </td>
+                    <td className="py-2 pr-4 text-right font-mono tabular text-muted">
+                      ${r.costUsd.toFixed(4)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -134,6 +147,102 @@ export default async function LearningPage() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+function BestForCard({ taskType, result }: { taskType: string; result: BestForResult }) {
+  const best = result.best;
+  if (!best) return null;
+  const successPct = Math.round(best.successRate * 100);
+  const runnerUps = result.candidates.filter(
+    (c) => !(c.cli === best.cli && c.model === best.model),
+  );
+
+  return (
+    <Card
+      title={taskType}
+      subtitle={`${result.totalSamples} samples · ${result.source}`}
+      action={
+        <StatusPill tone="violet">
+          <Sparkles className="h-3 w-3" />
+          best
+        </StatusPill>
+      }
+    >
+      <div className="space-y-4">
+        <div className="rounded-lg border border-violet/30 bg-violet-soft p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Trophy className="h-4 w-4 text-violet" strokeWidth={2} />
+            <div className="flex flex-col">
+              <span className="font-mono text-sm font-semibold text-fg">
+                {best.cli}/<span className="text-muted">{best.model.split("/").pop()}</span>
+              </span>
+              <span className="font-mono text-2xs text-subtle">via {best.provider}</span>
+            </div>
+            <div className="ml-auto text-right">
+              <div className="font-mono text-2xs uppercase tracking-tightest text-subtle">
+                score
+              </div>
+              <div className="font-mono text-lg font-semibold tabular text-violet">
+                {best.score.toFixed(0)}
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3 font-mono text-xs">
+            <Metric label="success" value={`${successPct}%`} tone={successPct >= 90 ? "ok" : "warn"} />
+            <Metric label="avg cost" value={`$${best.avgCostUsd.toFixed(4)}`} />
+            <Metric label="avg ms" value={Math.round(best.avgDurationMs).toString()} />
+          </div>
+          <div className="mt-3">
+            <Bar percent={successPct} size="sm" />
+          </div>
+        </div>
+
+        {runnerUps.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="font-mono text-2xs uppercase tracking-tightest text-subtle">
+              runners-up
+            </div>
+            {runnerUps.slice(0, 4).map((c) => (
+              <div
+                key={`${c.cli}/${c.model}`}
+                className="flex items-center justify-between rounded-md border border-border/40 bg-surface-2 px-3 py-1.5"
+              >
+                <div className="flex min-w-0 items-center gap-2 font-mono text-xs">
+                  <Crown className="h-3 w-3 text-subtle" strokeWidth={1.8} />
+                  <span className="truncate text-muted">
+                    {c.cli}/<span className="text-fg">{c.model.split("/").pop()}</span>
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-center gap-2 font-mono text-2xs tabular text-subtle">
+                  <span>{Math.round(c.successRate * 100)}%</span>
+                  <span>${c.avgCostUsd.toFixed(4)}</span>
+                  <span className="text-muted">score {c.score.toFixed(0)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "ok" | "warn";
+}) {
+  const valTone = tone === "ok" ? "text-success" : tone === "warn" ? "text-warning" : "text-fg";
+  return (
+    <div className="flex flex-col">
+      <span className="text-2xs uppercase tracking-tightest text-subtle">{label}</span>
+      <span className={`tabular ${valTone}`}>{value}</span>
     </div>
   );
 }
