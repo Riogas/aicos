@@ -1,0 +1,23 @@
+diff --git a/server/src/routes/issues.ts b/server/src/routes/issues.ts
+index b2f2d872..01261cb7 100644
+--- a/server/src/routes/issues.ts
++++ b/server/src/routes/issues.ts
+@@ -1395,6 +1395,18 @@ export function issueRoutes(
+     if (issue.assigneeAgentId === null) {
+       return true;
+     }
++    // AICOS R5 patch: opt-in flag to allow cross-agent mutations WITHIN the
++    // SAME company. Multi-tenant safety is preserved because assertCompanyAccess
++    // upstream already rejects cross-company actors. This is useful when an
++    // external bridge orchestrates worker agents (Architect/Implementer/Reviewer)
++    // over tickets assigned to a meta-agent (Hermes / CEO). The audit trail
++    // lives in the comment body (which includes the real agent name).
++    if (
++      process.env.PAPERCLIP_ALLOW_INTRA_COMPANY_AGENT_MUTATIONS === "true" &&
++      req.actor.companyId === issue.companyId
++    ) {
++      return true;
++    }
+     if (issue.assigneeAgentId !== actorAgentId) {
+       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
+         return true;

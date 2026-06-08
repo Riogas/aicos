@@ -87,6 +87,9 @@ services:
       PAPERCLIP_CONFIG: /paperclip/instances/default/config.json
       PAPERCLIP_DEPLOYMENT_MODE: authenticated
       PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+      # AICOS R5 patch: allow agents of the same company to comment/patch each
+      # other's issues. Multi-tenant cross-company stays blocked.
+      PAPERCLIP_ALLOW_INTRA_COMPANY_AGENT_MUTATIONS: "true"
     volumes:
       - paperclip-data:/paperclip
     ports:
@@ -118,6 +121,27 @@ services:
       - "7001:7001"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:7001/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  aicos-policy-engine:
+    build:
+      context: ..
+      dockerfile: services/aicos-policy-engine/Dockerfile
+    image: aicos/policy-engine:local
+    container_name: aicos-policy-engine
+    restart: unless-stopped
+    environment:
+      POLICY_PORT: "7002"
+      POLICY_ENABLED: "true"
+      LOG_LEVEL: info
+      # POLICY_RULES_FILE: /etc/aicos/policy.json   # optional override
+    ports:
+      - "7002:7002"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:7002/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
