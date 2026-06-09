@@ -247,6 +247,78 @@ export class PaperclipClient {
   }
 
   /**
+   * Replace an issue's description (used by the context-injection step in the
+   * subtask promoter: when subtask B is ready and its blocker A is done, we
+   * fetch A's last comment and append it to B's description so the agent
+   * working on B sees A's output before starting).
+   */
+  async patchDescription(issueId: string, description: string): Promise<void> {
+    const url = `${this.cfg.apiUrl}${ISSUE_PATH(issueId)}`;
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: this.headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ description }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(
+        `paperclip.patchDescription(${issueId}): ${res.status} ${res.statusText} ${txt}`,
+      );
+    }
+  }
+
+  /** Fetch all comments of an issue (oldest first). */
+  async getComments(
+    issueId: string,
+  ): Promise<Array<{ id: string; body: string; authorAgentId?: string | null; authorUserId?: string | null; createdAt?: string }>> {
+    const url = `${this.cfg.apiUrl}${COMMENTS_PATH(issueId)}`;
+    const res = await fetch(url, { headers: this.headers() });
+    if (!res.ok) {
+      throw new Error(
+        `paperclip.getComments(${issueId}): ${res.status} ${res.statusText}`,
+      );
+    }
+    const data = (await res.json()) as unknown;
+    const items = Array.isArray(data)
+      ? (data as Array<Record<string, unknown>>)
+      : ((data as { items?: Array<Record<string, unknown>> })?.items ?? []);
+    return items.map((c) => ({
+      id: String(c.id ?? ""),
+      body: String(c.body ?? ""),
+      authorAgentId: (c.authorAgentId as string | null | undefined) ?? null,
+      authorUserId: (c.authorUserId as string | null | undefined) ?? null,
+      createdAt: c.createdAt as string | undefined,
+    }));
+  }
+
+  /**
+   * List direct children of an issue (parentId equals this issue's id). Used
+   * by the parent-reconciler step: when every child is done/cancelled, mark
+   * the parent done too.
+   */
+  async listChildren(
+    companyId: string,
+    parentIssueId: string,
+  ): Promise<Array<{ id: string; identifier: string | null; status: string }>> {
+    const url = `${this.cfg.apiUrl}/api/companies/${companyId}/issues?parentId=${encodeURIComponent(parentIssueId)}`;
+    const res = await fetch(url, { headers: this.headers() });
+    if (!res.ok) {
+      throw new Error(
+        `paperclip.listChildren(${parentIssueId}): ${res.status} ${res.statusText}`,
+      );
+    }
+    const data = (await res.json()) as unknown;
+    const items = Array.isArray(data)
+      ? (data as Array<Record<string, unknown>>)
+      : ((data as { items?: Array<Record<string, unknown>> })?.items ?? []);
+    return items.map((i) => ({
+      id: String(i.id ?? ""),
+      identifier: (i.identifier as string | null) ?? null,
+      status: String(i.status ?? ""),
+    }));
+  }
+
+  /**
    * Soft-fail: si el endpoint no existe en esta version de Paperclip,
    * loggeamos y seguimos. El costo eventualmente se manejara via Quota
    * Manager (R4) — esto es best-effort.
