@@ -35,6 +35,12 @@ export interface QuotaClient {
     candidates: Candidate[];
   }): Promise<SelectResult | null>;
   recordUsage(input: UsageInput): Promise<boolean>;
+  /**
+   * Mark a provider as unavailable for `cooldownSec` seconds. Used by the
+   * retry-with-fallback loop when a provider has N consecutive failures,
+   * so subsequent /select calls skip it until the window expires.
+   */
+  markProviderDown(provider: string, cooldownSec: number, reason?: string): Promise<boolean>;
   isEnabled(): boolean;
 }
 
@@ -45,6 +51,7 @@ export function createQuotaClient(url: string | undefined): QuotaClient {
     return {
       selectModel: async () => null,
       recordUsage: async () => false,
+      markProviderDown: async () => false,
       isEnabled: () => false,
     };
   }
@@ -97,6 +104,27 @@ export function createQuotaClient(url: string | undefined): QuotaClient {
         return true;
       } catch (e) {
         process.stderr.write(`[quota] /usage fail: ${(e as Error).message}\n`);
+        return false;
+      }
+    },
+    async markProviderDown(provider, cooldownSec, reason) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+        const res = await fetch(`${base}/providers/${encodeURIComponent(provider)}/down`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cooldownSec, reason }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (!res.ok) {
+          process.stderr.write(`[quota] markProviderDown(${provider}) ${res.status}\n`);
+          return false;
+        }
+        return true;
+      } catch (e) {
+        process.stderr.write(`[quota] markProviderDown(${provider}) fail: ${(e as Error).message}\n`);
         return false;
       }
     },

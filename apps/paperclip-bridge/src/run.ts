@@ -188,59 +188,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     }
   }
 
-  // Estrategia de ejecucion:
-  //   1) Si hay persona + CLI conocida: spawnear esa CLI DIRECTAMENTE
-  //      (Hermes brain saltea — la CLI es agente nativo y ejecuta tools por su cuenta).
-  //   2) Si hay persona pero CLI desconocida: cae a Hermes oneshot con persona prompt.
-  //   3) Si no hay persona: Hermes oneshot crudo (CLI mode tradicional del bridge).
-  //
-  // Quota-aware override (R3): si quotaClient esta presente + hay persona, consultamos
-  // /select antes del spawn. El Quota Manager elige preferred/fallback/survival segun
-  // budgets reales. Si responde null (caido o pass-through) usamos el preferred del registry.
-  let effectiveCli = input.persona?.preferredModel?.cli;
-  let effectiveModel = input.persona?.preferredModel?.model;
-  let effectiveProvider: string | undefined;
-  let quotaReason: string | undefined;
-
-  if (input.quotaClient?.isEnabled() && input.persona) {
-    const candidates = buildCandidates(
-      input.persona.preferredModel,
-      input.persona.fallbackChain,
-    );
-    if (candidates.length > 0) {
-      const result = await input.quotaClient.selectModel({
-        role: input.persona.registryId,
-        task: input.task,
-        candidates,
-      });
-      if (result) {
-        effectiveCli = result.chosen.cli;
-        effectiveModel = result.chosen.model;
-        effectiveProvider = result.chosen.provider;
-        quotaReason = result.reason;
-        if (result.reason !== "preferred") {
-          process.stderr.write(
-            `[quota] persona=${input.persona.registryId} routed to ${result.chosen.cli}/${result.chosen.model} (${result.reason}${result.survivalActive ? ", survival" : ""})\n`,
-          );
-        }
-      }
-    }
-  }
-  if (!effectiveProvider && effectiveCli) {
-    effectiveProvider = inferProvider(effectiveCli, effectiveModel);
-  }
-
-  const cli = asCli(effectiveCli);
-
-  let exitCode: number;
-  let output: string;
-  let stderr: string;
-  let mode: ExecuteRunResult["mode"];
-  let costUsd = 0;
-  let tokens: { input?: number; output?: number; cached?: number } | undefined;
-
-  // Memory retrieval (L4 — 4 scopes): agent (este worker), project (workspace),
-  // company + market (global). Inyectados como contexto al prompt.
+  // Memory retrieval (L4 — 4 scopes). Done ONCE before the retry loop because
+  // memory context doesn't depend on which CLI we end up using.
   let memoryBlock = "";
   if (input.persona) {
     try {
@@ -264,8 +213,35 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     }
   }
 
-  if (input.persona && cli) {
-    mode = "direct-cli";
+  // Build candidate chain (preferred + fallbackChain) ordered exactly as the
+  // registry says. The retry loop walks this list and tries each until one
+  // succeeds. Quota /select is re-consulted per attempt so that a provider
+  // marked-down after a previous failure gets skipped automatically.
+  const candidates = input.persona
+    ? buildCandidates(input.persona.preferredModel, input.persona.fallbackChain)
+    : [];
+
+  // Cooldown threshold: after AUTO_COOLDOWN_FAIL_THRESHOLD consecutive failures
+  // of the same provider in this single executeRun, the bridge tells the quota
+  // manager to mark that provider down for AUTO_COOLDOWN_SEC seconds. Other
+  // concurrent runs (and the next attempt of this one) then skip it via /select.
+  const AUTO_COOLDOWN_FAIL_THRESHOLD = 2;
+  const AUTO_COOLDOWN_SEC = 300; // 5 min
+  const failuresByProvider = new Map<string, number>();
+
+  // Result holders — filled by the loop. Defaults assume nothing ran.
+  let exitCode = -1;
+  let output = "";
+  let stderr = "";
+  let mode: ExecuteRunResult["mode"] = "direct-cli";
+  let effectiveCli: string | undefined;
+  let effectiveModel: string | undefined;
+  let effectiveProvider: string | undefined;
+  let costUsd = 0;
+  let tokens: { input?: number; output?: number; cached?: number } | undefined;
+  let attemptCount = 0;
+
+  if (input.persona && candidates.length > 0) {
     const baseDirectPrompt = buildDirectCliPrompt({
       agentName: input.persona.agentName,
       registryId: input.persona.registryId,
@@ -278,22 +254,154 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     const directPrompt = memoryBlock
       ? `${memoryBlock}\n\n---\n\n${baseDirectPrompt}`
       : baseDirectPrompt;
-    const result = await invokeCli({
-      cli,
-      model: effectiveModel,
-      prompt: directPrompt,
-      cwd: input.workspace?.cwd,
-    });
-    exitCode = result.exitCode;
-    // Preferimos parsedText (texto limpio del CLI structured output) sobre stdout crudo.
-    output = (result.parsedText ?? result.stdout).trim();
-    stderr = result.stderr;
-    if (result.costUsd !== undefined) costUsd = result.costUsd;
-    if (result.tokens) tokens = result.tokens;
-    process.stderr.write(
-      `[direct-cli ${cli}${quotaReason ? ` ${quotaReason}` : ""}${result.costUsd !== undefined ? ` $${result.costUsd.toFixed(4)}` : ""}] ${result.command}\n`,
-    );
-  } else {
+
+    // We track which (cli, model) pairs we've already spawned so the next
+    // iteration excludes them from the pool sent to quota. Without this guard
+    // we'd loop on the same failing provider forever.
+    const attempted = new Set<string>();
+    const maxAttempts = candidates.length + 2; // small slack for survival inserts
+
+    while (attemptCount < maxAttempts) {
+      const remaining = candidates.filter(
+        (c) => !attempted.has(`${c.cli}|${c.model}`),
+      );
+      if (remaining.length === 0) break;
+
+      // Ask quota for the best usable candidate from what's left. Quota
+      // applies hard-rules + provider availability (incl. cooldowns) + survival
+      // overlay. If it can't pick any, we're done.
+      let chosen = remaining[0]!;
+      let quotaReason = "preferred";
+      if (input.quotaClient?.isEnabled()) {
+        const select = await input.quotaClient
+          .selectModel({
+            role: input.persona.registryId,
+            task: input.task,
+            candidates: remaining,
+          })
+          .catch(() => null);
+        if (!select) {
+          // Quota couldn't find anything available among the remaining
+          // candidates (e.g. all providers down or budget-exhausted). Stop.
+          process.stderr.write(
+            `[fallback] quota returned no usable candidate (${remaining.length} remaining) — stopping retry loop\n`,
+          );
+          break;
+        }
+        chosen = select.chosen;
+        quotaReason = select.reason;
+        // Quota may inject survivalModels (NOT in `remaining`) and pick one.
+        // If that pick was already tried this run, we'd loop forever. Mark it
+        // down so the next /select call skips it, and break out so we don't
+        // re-spawn the same failing one.
+        if (attempted.has(`${chosen.cli}|${chosen.model}`)) {
+          if (input.quotaClient?.isEnabled()) {
+            void input.quotaClient
+              .markProviderDown(
+                chosen.provider,
+                AUTO_COOLDOWN_SEC,
+                `auto: re-picked already-attempted ${chosen.cli}/${chosen.model}`,
+              )
+              .catch(() => {});
+          }
+          process.stderr.write(
+            `[fallback] quota re-picked already-tried ${chosen.cli}/${chosen.model} — marking provider down + retrying\n`,
+          );
+          continue;
+        }
+      }
+
+      attempted.add(`${chosen.cli}|${chosen.model}`);
+      attemptCount++;
+
+      const cli = asCli(chosen.cli);
+      if (!cli) {
+        process.stderr.write(
+          `[fallback] attempt ${attemptCount}: cli=${chosen.cli} not supported by direct-cli — skipping\n`,
+        );
+        continue;
+      }
+
+      const t0 = Date.now();
+      const result = await invokeCli({
+        cli,
+        model: chosen.model,
+        prompt: directPrompt,
+        cwd: input.workspace?.cwd,
+      });
+      const attemptDuration = Date.now() - t0;
+
+      process.stderr.write(
+        `[fallback] attempt ${attemptCount}: ${chosen.cli}/${chosen.model}` +
+          ` (${quotaReason})` +
+          ` exit=${result.exitCode}` +
+          `${result.costUsd !== undefined ? ` $${result.costUsd.toFixed(4)}` : ""}` +
+          `${result.exitCode === 0 ? " — OK" : " — FAIL"}\n`,
+      );
+
+      // Remember the latest attempt — even on failure — so we have a result
+      // to return if the entire chain fails.
+      exitCode = result.exitCode;
+      output = (result.parsedText ?? result.stdout).trim();
+      stderr = result.stderr;
+      effectiveCli = chosen.cli;
+      effectiveModel = chosen.model;
+      effectiveProvider = chosen.provider;
+      costUsd = result.costUsd ?? 0;
+      tokens = result.tokens;
+
+      if (result.exitCode === 0) break;
+
+      // Failure — record outcome to learning per attempt so dashboard sees the chain.
+      if (input.learningClient?.isEnabled()) {
+        void input.learningClient
+          .recordOutcome({
+            provider: chosen.provider,
+            cli: chosen.cli,
+            model: chosen.model,
+            taskType: input.task ?? "other",
+            success: false,
+            durationMs: attemptDuration,
+            costUsd: result.costUsd ?? 0,
+            agentRegistryId: input.persona.registryId,
+            ticketId: input.ticketIdentifier ?? pc?.issueId,
+            failureReason: `attempt ${attemptCount}: exit ${result.exitCode}`,
+          })
+          .catch(() => {});
+      }
+
+      // Auto-cooldown: after N failures of the same provider in one run, ask
+      // quota to mark it down for AUTO_COOLDOWN_SEC. Subsequent /select calls
+      // (this run AND other concurrent runs) will skip it automatically.
+      const failures = (failuresByProvider.get(chosen.provider) ?? 0) + 1;
+      failuresByProvider.set(chosen.provider, failures);
+      if (failures >= AUTO_COOLDOWN_FAIL_THRESHOLD && input.quotaClient?.isEnabled()) {
+        void input.quotaClient
+          .markProviderDown(
+            chosen.provider,
+            AUTO_COOLDOWN_SEC,
+            `auto: ${failures} fails in single run for ${input.persona.registryId}`,
+          )
+          .catch(() => {});
+        process.stderr.write(
+          `[fallback] provider=${chosen.provider} marked DOWN ${AUTO_COOLDOWN_SEC}s after ${failures} consecutive fails\n`,
+        );
+      }
+    }
+
+    if (attemptCount === 0) {
+      process.stderr.write(
+        `[fallback] all ${candidates.length} candidates skipped — falling through to hermes oneshot\n`,
+      );
+    }
+  }
+
+  // Hermes fallback path:
+  //  - no persona at all → hermes-oneshot raw
+  //  - persona but candidates.length === 0 or every candidate was skipped → hermes-fallback
+  //  - persona + at least one attempt was made but ALL failed → DON'T fall to hermes
+  //    (we already exhausted options; surface the last failure)
+  if (attemptCount === 0) {
     mode = input.persona ? "hermes-fallback" : "hermes-oneshot";
     const finalPrompt = input.persona
       ? buildPersonaPrompt(input.persona, input.prompt, input.workspace)
@@ -307,6 +415,12 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     exitCode = result.exitCode;
     output = result.stdout.trim();
     stderr = result.stderr;
+    // Hermes uses whatever provider it was configured with — best-effort attribution.
+    if (!effectiveProvider) {
+      effectiveCli = "hermes";
+      effectiveModel = input.model;
+      effectiveProvider = input.provider ?? inferProvider("hermes", input.model);
+    }
   }
 
   const durationMs = Date.now() - start;
