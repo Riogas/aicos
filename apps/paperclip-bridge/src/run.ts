@@ -440,8 +440,56 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
             ? `**stderr**\n\`\`\`\n${stderr.trim().slice(0, 4000)}\n\`\`\``
             : "");
 
+    // Build presentation + metadata to signal "final report" semantics to
+    // Paperclip's UI and (partly) its recovery system. Vendor schema valid:
+    //   presentation: { kind: "message", tone: success|danger }
+    //   metadata: { version: 1, sections: [...key_value rows...] }
+    const presentation =
+      exitCode === 0
+        ? { kind: "message" as const, tone: "success" as const, title: "Final report — completed" }
+        : { kind: "message" as const, tone: "danger" as const, title: "Final report — execution failed" };
+
+    // Paperclip's strict schema: ONE key/value per row, label = key.
+    const rows: Array<{ type: "key_value"; label: string; value: string }> = [];
+    if (input.persona) rows.push({ type: "key_value", label: "agent", value: input.persona.agentName });
+    rows.push({ type: "key_value", label: "mode", value: mode });
+    if (effectiveCli) rows.push({ type: "key_value", label: "cli", value: effectiveCli });
+    if (effectiveModel) rows.push({ type: "key_value", label: "model", value: effectiveModel });
+    if (effectiveProvider) rows.push({ type: "key_value", label: "provider", value: effectiveProvider });
+    rows.push({ type: "key_value", label: "exit_code", value: String(exitCode) });
+    rows.push({ type: "key_value", label: "duration_ms", value: String(durationMs) });
+    if (costUsd > 0) rows.push({ type: "key_value", label: "cost_usd", value: costUsd.toFixed(4) });
+    if (tokens?.input) rows.push({ type: "key_value", label: "tokens_in", value: String(tokens.input) });
+    if (tokens?.output) rows.push({ type: "key_value", label: "tokens_out", value: String(tokens.output) });
+    rows.push({ type: "key_value", label: "disposition", value: exitCode === 0 ? "completed" : "failed" });
+    rows.push({ type: "key_value", label: "next_action", value: "none" });
+    if (commitInfo?.committed && commitInfo.commitSha) {
+      rows.push({ type: "key_value", label: "commit_sha", value: commitInfo.commitSha });
+    }
+
+    const metadata = {
+      version: 1 as const,
+      sections: [
+        {
+          title: exitCode === 0 ? "Execution result" : "Execution failure",
+          rows,
+        },
+      ],
+    };
+
+    // KNOWN VENDOR LIMITATION: Paperclip restricts `presentation` and
+    // `metadata` fields to BOARD USERS ONLY (returns 403 for agent actors).
+    // We keep the enriched payload code here for future use (e.g., when
+    // running as a board-impersonating service or after vendor unlocks it),
+    // but gate sending behind an env flag to avoid noisy 403s in normal
+    // operation. The bridge falls back to plain body posts which always work.
+    const enrichEnabled = process.env.PAPERCLIP_ENRICH_COMMENTS === "true";
     try {
-      await pc.client.postComment(pc.issueId, commentBody);
+      await pc.client.postComment(
+        pc.issueId,
+        commentBody,
+        enrichEnabled ? { presentation, metadata } : undefined,
+      );
     } catch (e) {
       process.stderr.write(`postComment warn: ${(e as Error).message}\n`);
     }
