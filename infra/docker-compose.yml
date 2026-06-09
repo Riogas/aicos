@@ -92,6 +92,12 @@ services:
       PAPERCLIP_ALLOW_INTRA_COMPANY_AGENT_MUTATIONS: "true"
     volumes:
       - paperclip-data:/paperclip
+      # AICOS Path A: mount the host's home at the SAME path inside the
+      # container so workspace cwd values (which are host-absolute, e.g.
+      # /home/jgomez/Projects/riogas-pwa) resolve identically when the
+      # process adapter spawns the bridge. Node 24 is already inside this
+      # image so the bridge JS runs natively without extra runtime install.
+      - /home/jgomez:/home/jgomez:rw
     ports:
       - "3100:3100"
     healthcheck:

@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { runHermesOneshot } from "./hermes.js";
 import { startServer } from "./server.js";
+import { runPaperclipProcessMode } from "./paperclip-process-mode.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 function printHelp(): void {
   process.stdout.write(`aicos-bridge ${VERSION}
@@ -21,10 +22,19 @@ Modos:
 
      Endpoints:
         GET  /health
+        GET  /in-flight
         POST /run
            body: { issueId? prompt? model? provider? runId? agentId? }
-           si hay issueId + paperclip configurado -> fetch ticket, ejecuta,
-           postea comment + status de vuelta a Paperclip (fire-and-forget OK).
+
+  3. Paperclip process-adapter mode (spawned by Paperclip)
+     aicos-bridge --paperclip-process-mode
+        env PAPERCLIP_AGENT_ID    auto-injected
+        env PAPERCLIP_COMPANY_ID  auto-injected
+        env PAPERCLIP_API_URL     auto-injected
+        env PAPERCLIP_API_KEY     must be in agent.adapter_config.env
+        env PAPERCLIP_RUN_ID      optional, run id
+     Lookup current assigned issue, execute run, exit 0/1.
+     Paperclip captures exit code + stdout natively (no watchdog mismatch).
 
 Comandos rapidos:
   aicos-bridge --version
@@ -61,6 +71,13 @@ async function main(): Promise<number> {
   if (args.includes("--version") || args.includes("-V")) {
     process.stdout.write(`aicos-bridge ${VERSION}\n`);
     return 0;
+  }
+
+  // Paperclip process-adapter mode: invoked by Paperclip subprocess.
+  // Reads PAPERCLIP_* env, picks the assigned issue, runs, exits 0/1.
+  // Paperclip captures exit code + stdout natively → no watchdog mismatch.
+  if (args.includes("--paperclip-process-mode")) {
+    return runPaperclipProcessMode();
   }
 
   if (args.includes("--serve")) {
