@@ -162,6 +162,20 @@
 .spin-slow { animation: spin-slow 8s linear infinite; }
 .spin-slow-rev { animation: spin-slow 12s linear infinite reverse; }
 
+/* Narration card slide-in / fade-out */
+@keyframes narration-in {
+  0%   { transform: translateX(-16px); opacity: 0; filter: blur(2px); }
+  60%  { transform: translateX(3px); opacity: 1; filter: blur(0); }
+  100% { transform: translateX(0); opacity: 1; }
+}
+.narration-in { animation: narration-in 0.5s ease-out forwards; }
+
+@keyframes narration-out {
+  0%   { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(-14px); filter: blur(2px); }
+}
+.narration-out { animation: narration-out 0.6s ease-in forwards; }
+
 /* Glitch / readout flicker */
 @keyframes hud-flicker {
   0%, 100% { opacity: 1; }

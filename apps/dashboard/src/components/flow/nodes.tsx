@@ -19,11 +19,12 @@ import {
 type Tone = "idle" | "live" | "warn" | "ok" | "err" | "accent";
 
 /* ───────────────────────────────────────────────────────────────
-   Hexagonal shell — used by most nodes
+   Cut-corner rectangle (octagonal) shell — sci-fi tech panel.
+   Way more room for text than a hexagon.
 ─────────────────────────────────────────────────────────────── */
 function HexShell({
-  width = 156,
-  height = 60,
+  width = 200,
+  height = 64,
   tone = "idle",
   live = false,
   critical = false,
@@ -48,13 +49,39 @@ function HexShell({
             : tone === "accent"
               ? "#a855f7"
               : "rgba(0,217,255,0.4)";
-  const innerOpacity = live ? 0.18 : critical ? 0.10 : 0.04;
+  const innerOpacity = live ? 0.18 : critical ? 0.10 : 0.05;
   const glow = live
-    ? `drop-shadow(0 0 12px ${toneColor}) drop-shadow(0 0 24px ${toneColor})`
+    ? `drop-shadow(0 0 10px ${toneColor}) drop-shadow(0 0 22px ${toneColor})`
     : critical
       ? `drop-shadow(0 0 6px ${toneColor})`
       : "none";
-  const gradId = `hex-fill-${tone}-${live ? "1" : "0"}`;
+  const gradId = `cc-${tone}-${live ? "1" : "0"}-${critical ? "c" : "x"}`;
+  const cc = 10; // corner cut
+
+  const points = [
+    [cc, 0],
+    [width - cc, 0],
+    [width, cc],
+    [width, height - cc],
+    [width - cc, height],
+    [cc, height],
+    [0, height - cc],
+    [0, cc],
+  ];
+  const pointStr = points.map((p) => p.join(",")).join(" ");
+
+  const innerOff = 3.5;
+  const innerPoints = [
+    [cc + innerOff * 0.7, innerOff],
+    [width - cc - innerOff * 0.7, innerOff],
+    [width - innerOff, cc + innerOff * 0.7],
+    [width - innerOff, height - cc - innerOff * 0.7],
+    [width - cc - innerOff * 0.7, height - innerOff],
+    [cc + innerOff * 0.7, height - innerOff],
+    [innerOff, height - cc - innerOff * 0.7],
+    [innerOff, cc + innerOff * 0.7],
+  ];
+  const innerStr = innerPoints.map((p) => p.join(",")).join(" ");
 
   return (
     <div
@@ -69,48 +96,29 @@ function HexShell({
       >
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={toneColor} stopOpacity={innerOpacity + 0.04} />
+            <stop offset="0%" stopColor={toneColor} stopOpacity={innerOpacity + 0.05} />
             <stop offset="100%" stopColor="#000" stopOpacity={innerOpacity} />
           </linearGradient>
         </defs>
         <polygon
-          points={`${height / 2},0 ${width - height / 2},0 ${width},${height / 2} ${width - height / 2},${height} ${height / 2},${height} 0,${height / 2}`}
+          points={pointStr}
           fill={`url(#${gradId})`}
           stroke={toneColor}
-          strokeWidth={live ? 1.3 : 0.8}
-          opacity={live ? 1 : 0.65}
+          strokeWidth={live ? 1.4 : 0.9}
+          opacity={live ? 1 : 0.75}
         />
-        {/* Inner thin line for double-stroke tech effect */}
         <polygon
-          points={`${height / 2 + 4},4 ${width - height / 2 - 4},4 ${width - 4},${height / 2} ${width - height / 2 - 4},${height - 4} ${height / 2 + 4},${height - 4} 4,${height / 2}`}
+          points={innerStr}
           fill="none"
           stroke={toneColor}
           strokeWidth={0.5}
-          opacity={live ? 0.4 : 0.15}
+          opacity={live ? 0.45 : 0.18}
         />
-        {/* Mid-edge accent dashes (hex vertices) */}
-        {[
-          [height / 2 - 3, 0, height / 2 + 3, 0],
-          [width - height / 2 - 3, 0, width - height / 2 + 3, 0],
-          [0, height / 2 - 3, 0, height / 2 + 3],
-          [width, height / 2 - 3, width, height / 2 + 3],
-          [height / 2 - 3, height, height / 2 + 3, height],
-          [width - height / 2 - 3, height, width - height / 2 + 3, height],
-        ].map((p, i) => (
-          <line
-            key={i}
-            x1={p[0]}
-            y1={p[1]}
-            x2={p[2]}
-            y2={p[3]}
-            stroke={toneColor}
-            strokeWidth={1.5}
-            opacity={0.9}
-          />
-        ))}
+        {/* Side accent ticks */}
+        <line x1={2} y1={height * 0.3} x2={2} y2={height * 0.7} stroke={toneColor} strokeWidth={1.5} opacity={live ? 1 : 0.7} />
+        <line x1={width - 2} y1={height * 0.3} x2={width - 2} y2={height * 0.7} stroke={toneColor} strokeWidth={1.5} opacity={live ? 1 : 0.7} />
       </svg>
 
-      {/* Corner brackets — JARVIS lock-on style */}
       {live && (
         <>
           <span className="hud-bracket tl" />
@@ -120,7 +128,7 @@ function HexShell({
         </>
       )}
 
-      <div className="relative z-10 flex h-full items-center px-3">{children}</div>
+      <div className="relative z-10 flex h-full items-center px-4">{children}</div>
     </div>
   );
 }
@@ -187,7 +195,7 @@ export function OperatorNode({ data }: NodeProps) {
   const tone: Tone = d.active ? "live" : "idle";
   return (
     <>
-      <HexShell tone={tone} live={d.active} width={134}>
+      <HexShell tone={tone} live={d.active} width={170} height={62}>
         <NodeBody icon={User} title="OPERATOR" subtitle="HUMAN · TELEGRAM" tone={tone} />
       </HexShell>
       <HandleStyled type="source" position={Position.Right} />
@@ -201,7 +209,7 @@ export function BrainNode({ data }: NodeProps) {
   const segments = d.healthy ? 8 : 2;
   return (
     <>
-      <HexShell tone={tone} live={d.live} width={170}>
+      <HexShell tone={tone} live={d.live} width={200} height={62}>
         <NodeBody
           icon={Brain}
           title="HERMES · BRAIN"
@@ -227,7 +235,7 @@ export function PaperclipNode({ data }: NodeProps) {
   const tone: Tone = d.live ? "live" : "ok";
   return (
     <>
-      <HexShell tone={tone} live={d.live} width={160}>
+      <HexShell tone={tone} live={d.live} width={190} height={62}>
         <NodeBody icon={Workflow} title="PAPERCLIP" subtitle=":3100 · BOARD" tone={tone} detail="WORK QUEUE" />
       </HexShell>
       <HandleStyled type="target" position={Position.Left} />
@@ -309,7 +317,7 @@ export function WorkerNode({ data }: NodeProps) {
   const tone: Tone = d.active ? "live" : d.success === false ? "err" : "idle";
   return (
     <>
-      <HexShell tone={tone} live={d.active} width={154} height={48}>
+      <HexShell tone={tone} live={d.active} width={196} height={54}>
         <NodeBody
           icon={Sparkles}
           title={d.name.toUpperCase()}
@@ -328,7 +336,7 @@ export function CliNode({ data }: NodeProps) {
   const tone: Tone = d.active ? "live" : d.available === false ? "err" : "idle";
   return (
     <>
-      <HexShell tone={tone} live={d.active} width={120} height={46}>
+      <HexShell tone={tone} live={d.active} width={150} height={54}>
         <NodeBody
           icon={Terminal}
           title={d.name.toUpperCase()}
@@ -356,7 +364,7 @@ export function ProviderNode({ data }: NodeProps) {
   const pct = Math.round(d.pct ?? 0);
   return (
     <>
-      <HexShell tone={tone} live={d.active} critical={d.critical} width={140} height={50}>
+      <HexShell tone={tone} live={d.active} critical={d.critical} width={180} height={58}>
         <NodeBody
           icon={Cpu}
           title={d.name.toUpperCase()}
@@ -402,7 +410,7 @@ export function ServiceNode({ data }: NodeProps) {
   const tone: Tone = d.live ? "live" : d.healthy === false ? "err" : "ok";
   return (
     <>
-      <HexShell tone={tone} live={d.live} width={150} height={50}>
+      <HexShell tone={tone} live={d.live} width={180} height={58}>
         <NodeBody
           icon={Icon}
           title={d.name.toUpperCase()}

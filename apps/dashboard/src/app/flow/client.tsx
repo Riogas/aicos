@@ -13,6 +13,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
+import { NarrationFeed } from "@/components/flow/narration";
 import {
   OperatorNode,
   BrainNode,
@@ -170,6 +171,9 @@ export function FlowViewer() {
       >
         <Background gap={48} size={1} color="rgba(0,217,255,0.08)" />
         <Controls showInteractive={false} />
+
+        {/* JARVIS narration feed — pops up when something changes */}
+        <NarrationFeed snapshot={state} />
 
         {state && (
           <div
@@ -423,15 +427,14 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     }
   }
 
-  // Side services — arranged in an arc below the Bridge (arc-reactor satellites)
-  const bx = X.bridge + 65; // bridge center X (130/2)
-  const by = CENTER_Y + 215; // services row Y
+  // Side services — clustered BELOW the bridge in a tight row, well to the LEFT of the worker column (which starts at X.workers = 1440) to prevent collision with MK Strategist etc.
+  const sy = CENTER_Y + 380; // services row Y — below the bridge zone
   const services = [
-    { id: "quota", name: "Quota", port: 7001, icon: "gauge" as const, x: bx - 380, y: by - 30, detail: s?.quota?.survival ? "survival ⚠" : "ok" },
-    { id: "policy", name: "Policy", port: 7002, icon: "shield" as const, x: bx - 190, y: by + 20, detail: "5 rules" },
-    { id: "memory", name: "Memory", port: 6333, icon: "database" as const, x: bx - 75, y: by + 60, detail: "qdrant · 4 scopes" },
-    { id: "learning", name: "Learning", port: 7003, icon: "sparkles" as const, x: bx + 105, y: by + 20, detail: "outcomes →" },
-    { id: "gateway", name: "Tool Gateway", port: 7004, icon: "wrench" as const, x: bx + 270, y: by - 30, detail: s?.recentToolCalls?.length ? `${s.recentToolCalls.length} calls` : "idle" },
+    { id: "quota", name: "Quota", port: 7001, icon: "gauge" as const, x: 280, y: sy, detail: s?.quota?.survival ? "survival ⚠" : "ok" },
+    { id: "policy", name: "Policy", port: 7002, icon: "shield" as const, x: 510, y: sy, detail: "5 rules" },
+    { id: "memory", name: "Memory", port: 6333, icon: "database" as const, x: 740, y: sy + 30, detail: "qdrant · 4 scopes" },
+    { id: "learning", name: "Learning", port: 7003, icon: "sparkles" as const, x: 970, y: sy, detail: "outcomes →" },
+    { id: "gateway", name: "Tool Gateway", port: 7004, icon: "wrench" as const, x: 1200, y: sy, detail: s?.recentToolCalls?.length ? `${s.recentToolCalls.length} calls` : "idle" },
   ];
   for (const sv of services) {
     nodes.push({

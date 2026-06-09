@@ -48,13 +48,19 @@ export function AnimatedEdge({
         markerEnd={markerEnd}
         style={{
           stroke: c,
-          strokeWidth: d.active ? 1.6 : 0.9,
-          strokeDasharray: d.active ? undefined : "2 4",
-          filter: d.active ? `drop-shadow(0 0 6px ${c}) drop-shadow(0 0 12px ${c})` : "none",
-          opacity: d.active ? 0.95 : 0.5,
+          strokeWidth: d.active ? 1.8 : 1.1,
+          filter: d.active ? `drop-shadow(0 0 6px ${c}) drop-shadow(0 0 12px ${c})` : `drop-shadow(0 0 2px ${c})`,
+          opacity: d.active ? 0.95 : 0.55,
           transition: "all 0.4s ease",
         }}
       />
+
+      {/* Ambient idle particle — slow drift, just one dim dot */}
+      {!d.active && (
+        <circle r="1.2" fill={c} opacity="0.6">
+          <animateMotion dur="5.5s" repeatCount="indefinite" path={path} />
+        </circle>
+      )}
 
       {/* Live multi-particle stream with trail */}
       {d.active && (
