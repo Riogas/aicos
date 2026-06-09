@@ -158,6 +158,25 @@ export function resolvePersonaByRegistryId(
   return cachedByRegistryId?.get(registryId) ?? null;
 }
 
+/**
+ * Returns every RegistryAgent currently loaded. Used by the orchestrator
+ * decomposer to advertise the roster to the LLM.
+ */
+export function listRegistryAgents(): RegistryAgent[] {
+  return cachedRegistry?.agents ?? [];
+}
+
+/**
+ * Resolve a registryId to its paperclipAgentId (from agent-keys.json).
+ * Returns null if either the registry entry or the key mapping is missing.
+ */
+export function getPaperclipAgentIdForRegistryId(registryId: string): string | null {
+  const agent = cachedRegistry?.agents.find((a) => a.id === registryId);
+  if (agent?.paperclipAgentId) return agent.paperclipAgentId;
+  const key = cachedKeys?.[registryId];
+  return key?.paperclipAgentId ?? null;
+}
+
 export function formatModelPref(m: ModelPref | undefined): string {
   if (!m) return "(sin preferencia)";
   return `${m.cli}/${m.model}`;

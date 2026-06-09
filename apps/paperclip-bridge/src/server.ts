@@ -17,6 +17,8 @@ import {
   retrieveAllScopes,
   type MemoryScope,
 } from "./memory.js";
+import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
+import { startSubtaskPromoter } from "./subtask-promoter.js";
 
 const RunRequestSchema = z.object({
   issueId: z.string().optional(),
@@ -37,6 +39,12 @@ export interface ServerOptions {
   paperclipApiKey?: string;
   quotaServiceUrl?: string;
   learningServiceUrl?: string;
+  /**
+   * Company id used by the subtask promoter loop and the /orchestrate endpoint.
+   * Defaults to env AICOS_COMPANY_ID; if neither is set, /orchestrate is disabled
+   * and the promoter does not start.
+   */
+  companyId?: string;
 }
 
 export async function startServer(opts: ServerOptions): Promise<FastifyInstance> {
@@ -105,6 +113,79 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     app.log.info(s, "registry reloaded");
     return { ok: true, ...s };
   });
+
+  // ─── Orchestrator endpoint ───────────────────────────────────────────────
+  // POST /orchestrate { taskDescription, projectId, parentIssueId? }
+  // Returns { decomposition, createdIssues, warnings } and creates the subtask
+  // tree in Paperclip (root subs in 'todo', dependent subs in 'backlog' to be
+  // promoted by the loop below as their blockers complete).
+  const companyId = opts.companyId ?? process.env.AICOS_COMPANY_ID;
+  const orchestrateAvailable = paperclipReady && Boolean(companyId);
+
+  const OrchestrateRequestSchema = z.object({
+    taskDescription: z.string().min(1),
+    projectId: z.string().min(1),
+    parentIssueId: z.string().optional(),
+    defaultRole: z.string().optional(),
+  });
+
+  app.post("/orchestrate", async (req, reply) => {
+    if (!orchestrateAvailable) {
+      return reply.code(503).send({
+        error: "orchestrator disabled",
+        reason: paperclipReady ? "missing AICOS_COMPANY_ID env" : "paperclip not configured",
+      });
+    }
+    const parsed = OrchestrateRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid request", details: parsed.error.flatten() });
+    }
+    const input: OrchestrateInput = {
+      taskDescription: parsed.data.taskDescription,
+      companyId: companyId!,
+      projectId: parsed.data.projectId,
+      parentIssueId: parsed.data.parentIssueId,
+      defaultRole: parsed.data.defaultRole,
+    };
+    const client = new PaperclipClient({
+      apiUrl: opts.paperclipApiUrl!,
+      apiKey: opts.paperclipApiKey!,
+    });
+    try {
+      const result = await orchestrate(input, client);
+      app.log.info(
+        {
+          projectId: input.projectId,
+          parentIssueId: input.parentIssueId,
+          subtaskCount: result.createdIssues.length,
+          atomic: result.decomposition.atomic,
+          warningCount: result.warnings.length,
+        },
+        "orchestrated task",
+      );
+      return reply.code(202).send(result);
+    } catch (e) {
+      app.log.error({ err: (e as Error).message }, "orchestrate failed");
+      return reply.code(500).send({ error: "orchestrate failed", details: (e as Error).message });
+    }
+  });
+
+  // ─── Subtask promoter loop ───────────────────────────────────────────────
+  // Promotes backlog subtasks to todo once their blockers are all done.
+  if (orchestrateAvailable) {
+    const stop = startSubtaskPromoter({
+      apiUrl: opts.paperclipApiUrl!,
+      apiKey: opts.paperclipApiKey!,
+      companyId: companyId!,
+    });
+    app.addHook("onClose", async () => stop());
+    app.log.info({ companyId, intervalMs: 5000 }, "subtask promoter started");
+  } else {
+    app.log.warn(
+      { paperclipReady, companyIdConfigured: Boolean(companyId) },
+      "subtask promoter NOT started — set AICOS_COMPANY_ID + paperclip credentials to enable",
+    );
+  }
 
   // ─── L4 Memory endpoints ─────────────────────────────────────────────────
   const MemoryStoreSchema = z.object({

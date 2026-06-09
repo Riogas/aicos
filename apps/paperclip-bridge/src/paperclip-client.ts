@@ -60,6 +60,19 @@ export interface CommentMetadata {
 const COST_REPORTING_PATH = "/api/cost-events";
 const COMMENTS_PATH = (issueId: string) => `/api/issues/${issueId}/comments`;
 const ISSUE_PATH = (issueId: string) => `/api/issues/${issueId}`;
+const CREATE_ISSUE_PATH = (companyId: string) => `/api/companies/${companyId}/issues`;
+
+export interface CreateIssueInput {
+  companyId: string;
+  projectId: string;
+  title: string;
+  description?: string;
+  assigneeAgentId: string;
+  parentId?: string;
+  blockedByIssueIds?: string[];
+  priority?: "low" | "medium" | "high";
+  status?: "backlog" | "todo" | "in_progress" | "in_review" | "blocked" | "done";
+}
 
 export class PaperclipClient {
   /**
@@ -176,6 +189,59 @@ export class PaperclipClient {
       }
       throw new Error(
         `paperclip.updateStatus(${issueId}, ${status}): ${res.status} ${res.statusText} ${txt}`,
+      );
+    }
+  }
+
+  /**
+   * Crea un issue nuevo. Soporta jerarquía (parentId) y dependencias
+   * (blockedByIssueIds). Paperclip se encarga de crear las filas en
+   * issue_relations con type='blocks' a partir de blockedByIssueIds.
+   */
+  async createIssue(input: CreateIssueInput): Promise<PaperclipIssue> {
+    const url = `${this.cfg.apiUrl}${CREATE_ISSUE_PATH(input.companyId)}`;
+    const payload: Record<string, unknown> = {
+      title: input.title,
+      description: input.description ?? "",
+      assigneeAgentId: input.assigneeAgentId,
+      projectId: input.projectId,
+      priority: input.priority ?? "medium",
+    };
+    if (input.parentId) payload.parentId = input.parentId;
+    if (input.blockedByIssueIds && input.blockedByIssueIds.length > 0) {
+      payload.blockedByIssueIds = input.blockedByIssueIds;
+    }
+    if (input.status) payload.status = input.status;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this.headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(
+        `paperclip.createIssue: ${res.status} ${res.statusText} ${txt}`,
+      );
+    }
+    return (await res.json()) as PaperclipIssue;
+  }
+
+  /**
+   * Promote a backlog/todo issue to a new status. Used by the subtask promoter
+   * (when all blockers of a backlog issue are done → promote to todo).
+   */
+  async patchStatus(issueId: string, status: CreateIssueInput["status"]): Promise<void> {
+    if (!status) return;
+    const url = `${this.cfg.apiUrl}${ISSUE_PATH(issueId)}`;
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: this.headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(
+        `paperclip.patchStatus(${issueId},${status}): ${res.status} ${res.statusText} ${txt}`,
       );
     }
   }

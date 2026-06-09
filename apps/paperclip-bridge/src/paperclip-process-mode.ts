@@ -65,8 +65,11 @@ async function fetchAssignedIssues(
   companyId: string,
   agentId: string,
 ): Promise<PaperclipIssueListItem[]> {
-  // todo + in_progress + blocked covers everything we may need to pick up
-  const url = `${apiUrl}/api/companies/${companyId}/issues?assigneeAgentId=${agentId}&statusIn=todo,in_progress`;
+  // Paperclip's list endpoint only supports ?status=<single> (statusIn is silently
+  // ignored). When dispatched by Paperclip, the issue we want is in 'in_progress'
+  // because dispatch already promoted it. Filter strictly by that to avoid
+  // accidentally picking up an unrelated 'todo' that's still queued.
+  const url = `${apiUrl}/api/companies/${companyId}/issues?assigneeAgentId=${agentId}&status=in_progress`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
@@ -91,15 +94,13 @@ async function fetchAssignedIssues(
 
 async function pickIssue(items: PaperclipIssueListItem[]): Promise<PaperclipIssueListItem | null> {
   if (items.length === 0) return null;
-  // Prefer in_progress (Paperclip just dispatched it), fall back to oldest todo
+  // Strict: only in_progress (we narrowed the query to that). If somehow
+  // multiple are in_progress (shouldn't happen per-agent), pick the most recently
+  // updated one — Paperclip just bumped its updated_at on dispatch.
   const inProgress = items.filter((i) => i.status === "in_progress");
-  if (inProgress.length > 0) {
-    inProgress.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
-    return inProgress[0]!;
-  }
-  const todo = items.filter((i) => i.status === "todo");
-  todo.sort((a, b) => (a.updatedAt ?? "").localeCompare(b.updatedAt ?? ""));
-  return todo[0] ?? null;
+  if (inProgress.length === 0) return null;
+  inProgress.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  return inProgress[0]!;
 }
 
 export async function runPaperclipProcessMode(): Promise<number> {
