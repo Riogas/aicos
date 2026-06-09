@@ -6,7 +6,6 @@ import {
   ReactFlowProvider,
   Background,
   Controls,
-  MiniMap,
   type Edge,
   type Node,
   type NodeTypes,
@@ -76,32 +75,38 @@ const nodeTypes: NodeTypes = {
 
 const edgeTypes: EdgeTypes = { animated: AnimatedEdge };
 
-// Layout constants
-const X = { op: 0, hermes: 240, paperclip: 480, bridge: 760, workers: 1040, clis: 1320, providers: 1560 };
-const SIDE_Y = 720; // services row
+// Layout constants — spread for full-screen viewport
+const ROW_GAP = 92;
+const X = {
+  op: 60,
+  hermes: 360,
+  paperclip: 700,
+  bridge: 1080,
+  workers: 1440,
+  clis: 1800,
+  providers: 2120,
+};
+const CENTER_Y = 460; // main horizontal pipeline Y (op→bridge)
 
 const WORKERS = [
-  // IT — top group
-  { id: "it-analyst", name: "IT Analyst", role: "analyst", department: "IT", y: 60 },
-  { id: "it-architect", name: "IT Architect", role: "architect", department: "IT", y: 130 },
-  { id: "it-implementer", name: "IT Implementer", role: "impl", department: "IT", y: 200 },
-  { id: "it-code-reviewer", name: "Code Reviewer", role: "review", department: "IT", y: 270 },
-  { id: "it-security-reviewer", name: "Security Rev", role: "security", department: "IT", y: 340 },
-  { id: "it-documenter", name: "IT Documenter", role: "docs", department: "IT", y: 410 },
-  { id: "it-ui-ux-validator", name: "UX Validator", role: "ux", department: "IT", y: 480 },
-  // marketing
-  { id: "marketing-strategist", name: "MK Strategist", role: "strategy", department: "MK", y: 550 },
-  { id: "marketing-copywriter", name: "Copywriter", role: "copy", department: "MK", y: 620 },
-  // research
-  { id: "research-market", name: "Market Analyst", role: "research", department: "RX", y: 690 },
+  { id: "it-analyst", name: "IT Analyst", role: "analyst", department: "IT", y: 0 },
+  { id: "it-architect", name: "IT Architect", role: "architect", department: "IT", y: ROW_GAP },
+  { id: "it-implementer", name: "IT Implementer", role: "impl", department: "IT", y: ROW_GAP * 2 },
+  { id: "it-code-reviewer", name: "Code Reviewer", role: "review", department: "IT", y: ROW_GAP * 3 },
+  { id: "it-security-reviewer", name: "Security Rev", role: "security", department: "IT", y: ROW_GAP * 4 },
+  { id: "it-documenter", name: "IT Documenter", role: "docs", department: "IT", y: ROW_GAP * 5 },
+  { id: "it-ui-ux-validator", name: "UX Validator", role: "ux", department: "IT", y: ROW_GAP * 6 },
+  { id: "marketing-strategist", name: "MK Strategist", role: "strategy", department: "MK", y: ROW_GAP * 7 },
+  { id: "marketing-copywriter", name: "Copywriter", role: "copy", department: "MK", y: ROW_GAP * 8 },
+  { id: "research-market", name: "Market Analyst", role: "research", department: "RX", y: ROW_GAP * 9 },
 ];
 
 const CLIS = [
-  { id: "claude", name: "claude", y: 100 },
-  { id: "codex", name: "codex", y: 220 },
-  { id: "agy", name: "agy", y: 340 },
-  { id: "opencode", name: "opencode", y: 460 },
-  { id: "hermes-cli", name: "hermes", y: 580 },
+  { id: "claude", name: "claude", y: ROW_GAP * 1 },
+  { id: "codex", name: "codex", y: ROW_GAP * 3 },
+  { id: "agy", name: "agy", y: ROW_GAP * 5 },
+  { id: "opencode", name: "opencode", y: ROW_GAP * 7 },
+  { id: "hermes-cli", name: "hermes", y: ROW_GAP * 9 },
 ];
 
 const CLI_TO_PROVIDER: Record<string, string[]> = {
@@ -113,12 +118,12 @@ const CLI_TO_PROVIDER: Record<string, string[]> = {
 };
 
 const PROVIDERS = [
-  { id: "anthropic", name: "anthropic", y: 100 },
-  { id: "openai", name: "openai", y: 220 },
-  { id: "google", name: "google", y: 340 },
-  { id: "moonshot", name: "moonshot", y: 460 },
-  { id: "xiaomi", name: "xiaomi", y: 540 },
-  { id: "opencode-free", name: "opencode-free", y: 620 },
+  { id: "anthropic", name: "anthropic", y: ROW_GAP * 1 },
+  { id: "openai", name: "openai", y: ROW_GAP * 3 },
+  { id: "google", name: "google", y: ROW_GAP * 5 },
+  { id: "moonshot", name: "moonshot", y: ROW_GAP * 6.5 },
+  { id: "xiaomi", name: "xiaomi", y: ROW_GAP * 8 },
+  { id: "opencode-free", name: "opencode-free", y: ROW_GAP * 9.5 },
 ];
 
 export function FlowViewer() {
@@ -163,43 +168,67 @@ export function FlowViewer() {
           markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(255,255,255,0.4)" },
         }}
       >
-        <Background gap={32} size={1} color="rgba(255,255,255,0.04)" />
-        <Controls
-          showInteractive={false}
-          className="!rounded-md !border !border-border !bg-surface !text-fg"
-        />
-        <MiniMap
-          pannable
-          zoomable
-          className="!rounded-md !border !border-border !bg-surface"
-          nodeColor={(n) => (n.data as { active?: boolean })?.active ? "#3b82f6" : "#525252"}
-        />
+        <Background gap={48} size={1} color="rgba(0,217,255,0.08)" />
+        <Controls showInteractive={false} />
 
         {state && (
-          <div className="pointer-events-none absolute right-4 top-4 z-10 rounded-lg border border-border bg-surface/90 px-3 py-2 backdrop-blur-md">
-            <div className="font-mono text-2xs uppercase tracking-tightest text-subtle">
-              live · {state.ts.slice(11, 19)}Z
+          <div
+            className="pointer-events-none absolute right-12 top-16 z-20 min-w-[220px] border border-hud-dim bg-black/85 px-3 py-2.5 backdrop-blur-md"
+            style={{
+              clipPath: "polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))",
+              boxShadow: "0 0 20px rgba(0,217,255,0.15)",
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">
+                ◢ TELEMETRY
+              </span>
+              <span className="font-mono text-[8.5px] tabular text-hud-dim hud-flicker">
+                {state.ts.slice(11, 19)}Z
+              </span>
             </div>
-            <div className="mt-1 grid grid-cols-3 gap-3 font-mono text-xs">
+            <div className="my-1.5 h-px bg-hud-dim" />
+            <div className="grid grid-cols-3 gap-3 font-mono">
               <div>
-                <div className="text-subtle">runs</div>
-                <div className="text-fg">{state.totals.totalRunsToday}</div>
+                <div className="text-[8px] uppercase tracking-widest text-hud-dim">RUNS</div>
+                <div className="text-base font-bold tabular text-hud glow-text">
+                  {state.totals.totalRunsToday}
+                </div>
               </div>
               <div>
-                <div className="text-subtle">success</div>
-                <div className="text-fg">{state.totals.successRate}%</div>
+                <div className="text-[8px] uppercase tracking-widest text-hud-dim">OK</div>
+                <div className="text-base font-bold tabular text-hud glow-text">
+                  {state.totals.successRate}%
+                </div>
               </div>
               <div>
-                <div className="text-subtle">spend</div>
-                <div className="text-fg">${state.totals.totalCostToday.toFixed(3)}</div>
+                <div className="text-[8px] uppercase tracking-widest text-hud-dim">SPEND</div>
+                <div className="text-base font-bold tabular text-gold glow-text-gold">
+                  ${state.totals.totalCostToday.toFixed(2)}
+                </div>
               </div>
             </div>
             {state.liveRun && (
-              <div className="mt-2 border-t border-border pt-2">
-                <div className="font-mono text-2xs uppercase tracking-tightest text-accent">▶ live</div>
-                <div className="mt-0.5 text-xs text-fg">{state.liveRun.persona}</div>
-                <div className="font-mono text-2xs text-subtle">{state.liveRun.cli}/{state.liveRun.model.split("/").pop()}</div>
-              </div>
+              <>
+                <div className="my-1.5 h-px bg-hud-dim" />
+                <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">
+                  ▶ ACTIVE TARGET
+                </div>
+                <div className="mt-1 font-mono text-[11px] uppercase text-hud glow-text">
+                  {state.liveRun.persona}
+                </div>
+                <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+                  {state.liveRun.cli} · {state.liveRun.model.split("/").pop()} · {state.liveRun.provider}
+                </div>
+              </>
+            )}
+            {state.quota?.survival && (
+              <>
+                <div className="my-1.5 h-px bg-alert-glow" />
+                <div className="font-mono text-[9px] uppercase tracking-widest text-alert glow-text-alert">
+                  ⚠ SURVIVAL MODE
+                </div>
+              </>
             )}
           </div>
         )}
@@ -219,32 +248,32 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
-  // Tier 1 — main vertical pipeline
+  // Tier 1 — main horizontal pipeline (all aligned at CENTER_Y)
   nodes.push({
     id: "operator",
     type: "operator",
-    position: { x: X.op, y: 340 },
+    position: { x: X.op, y: CENTER_Y },
     data: { active: operatorActive },
   });
 
   nodes.push({
     id: "hermes",
     type: "brain",
-    position: { x: X.hermes, y: 340 },
+    position: { x: X.hermes, y: CENTER_Y },
     data: { healthy: s?.bridge.healthy, live: hermesLive },
   });
 
   nodes.push({
     id: "paperclip",
     type: "paperclip",
-    position: { x: X.paperclip, y: 340 },
+    position: { x: X.paperclip, y: CENTER_Y },
     data: { live: paperclipLive },
   });
 
   nodes.push({
     id: "bridge",
     type: "bridge",
-    position: { x: X.bridge, y: 340 },
+    position: { x: X.bridge, y: CENTER_Y - 15 },
     data: { healthy: s?.bridge.healthy, live: bridgeLive, agentCount: s?.bridge.agentCount },
   });
 
@@ -394,19 +423,21 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     }
   }
 
-  // Side services (Quota, Learning, Policy, ToolGateway, Memory) — below the bridge
+  // Side services — arranged in an arc below the Bridge (arc-reactor satellites)
+  const bx = X.bridge + 65; // bridge center X (130/2)
+  const by = CENTER_Y + 215; // services row Y
   const services = [
-    { id: "quota", name: "Quota", port: 7001, icon: "gauge" as const, x: X.bridge - 200, detail: s?.quota?.survival ? "survival ⚠" : "ok" },
-    { id: "policy", name: "Policy", port: 7002, icon: "shield" as const, x: X.bridge - 60, detail: "5 rules" },
-    { id: "learning", name: "Learning", port: 7003, icon: "sparkles" as const, x: X.bridge + 80, detail: "outcomes →" },
-    { id: "gateway", name: "Tool Gateway", port: 7004, icon: "wrench" as const, x: X.bridge + 220, detail: s?.recentToolCalls?.length ? `${s.recentToolCalls.length} calls` : "idle" },
-    { id: "memory", name: "Memory", port: 6333, icon: "database" as const, x: X.bridge + 360, detail: "qdrant · 4 scopes" },
+    { id: "quota", name: "Quota", port: 7001, icon: "gauge" as const, x: bx - 380, y: by - 30, detail: s?.quota?.survival ? "survival ⚠" : "ok" },
+    { id: "policy", name: "Policy", port: 7002, icon: "shield" as const, x: bx - 190, y: by + 20, detail: "5 rules" },
+    { id: "memory", name: "Memory", port: 6333, icon: "database" as const, x: bx - 75, y: by + 60, detail: "qdrant · 4 scopes" },
+    { id: "learning", name: "Learning", port: 7003, icon: "sparkles" as const, x: bx + 105, y: by + 20, detail: "outcomes →" },
+    { id: "gateway", name: "Tool Gateway", port: 7004, icon: "wrench" as const, x: bx + 270, y: by - 30, detail: s?.recentToolCalls?.length ? `${s.recentToolCalls.length} calls` : "idle" },
   ];
   for (const sv of services) {
     nodes.push({
       id: `s-${sv.id}`,
       type: "service",
-      position: { x: sv.x, y: SIDE_Y },
+      position: { x: sv.x, y: sv.y },
       data: { name: sv.name, port: sv.port, icon: sv.icon, healthy: true, live: bridgeLive, detail: sv.detail },
     });
     edges.push({

@@ -30,13 +30,15 @@ export function AnimatedEdge({
   const d = (data as unknown as AnimatedEdgeData) ?? {};
 
   const colorMap = {
-    idle: "rgba(255,255,255,0.12)",
-    live: "rgba(59,130,246,0.9)",
-    warn: "rgba(245,158,11,0.85)",
-    err: "rgba(239,68,68,0.85)",
-    accent: "rgba(168,85,247,0.85)",
+    idle: "rgba(0,217,255,0.18)",
+    live: "#00d9ff",
+    warn: "#fbbf24",
+    err: "#ff3b30",
+    accent: "#a855f7",
   };
-  const c = colorMap[d.tone ?? (d.active ? "live" : "idle")];
+  const tone = d.tone ?? (d.active ? "live" : "idle");
+  const c = colorMap[tone];
+  const duration = tone === "accent" ? "3.2s" : "1.6s";
 
   return (
     <>
@@ -46,30 +48,36 @@ export function AnimatedEdge({
         markerEnd={markerEnd}
         style={{
           stroke: c,
-          strokeWidth: d.active ? 1.8 : 1,
-          filter: d.active ? `drop-shadow(0 0 6px ${c})` : "none",
-          opacity: d.active ? 1 : 0.5,
+          strokeWidth: d.active ? 1.6 : 0.9,
+          strokeDasharray: d.active ? undefined : "2 4",
+          filter: d.active ? `drop-shadow(0 0 6px ${c}) drop-shadow(0 0 12px ${c})` : "none",
+          opacity: d.active ? 0.95 : 0.5,
           transition: "all 0.4s ease",
         }}
       />
+
+      {/* Live multi-particle stream with trail */}
       {d.active && (
         <>
-          <circle r="4" fill={c}>
-            <animateMotion
-              dur={d.tone === "accent" ? "2.4s" : "1.6s"}
-              repeatCount="indefinite"
-              path={path}
-            />
+          <circle r="3.5" fill={c} opacity="1" style={{ filter: `drop-shadow(0 0 8px ${c})` }}>
+            <animateMotion dur={duration} repeatCount="indefinite" path={path} />
           </circle>
-          <circle r="2" fill="white" opacity="0.95">
-            <animateMotion
-              dur={d.tone === "accent" ? "2.4s" : "1.6s"}
-              repeatCount="indefinite"
-              path={path}
-            />
+          <circle r="1.5" fill="white" opacity="0.95">
+            <animateMotion dur={duration} repeatCount="indefinite" path={path} />
+          </circle>
+          <circle r="2" fill={c} opacity="0.7" style={{ filter: `drop-shadow(0 0 4px ${c})` }}>
+            <animateMotion dur={duration} repeatCount="indefinite" begin="-0.15s" path={path} />
+          </circle>
+          <circle r="1.3" fill={c} opacity="0.45">
+            <animateMotion dur={duration} repeatCount="indefinite" begin="-0.3s" path={path} />
+          </circle>
+          <circle r="0.8" fill={c} opacity="0.25">
+            <animateMotion dur={duration} repeatCount="indefinite" begin="-0.45s" path={path} />
           </circle>
         </>
       )}
+
+      {/* HUD label tag with corner brackets */}
       {d.label && d.active && (
         <EdgeLabelRenderer>
           <div
@@ -78,9 +86,12 @@ export function AnimatedEdge({
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               pointerEvents: "none",
             }}
-            className="rounded-md border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-tightest text-fg"
           >
-            {d.label}
+            <div className="relative rounded border border-hud bg-black/90 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">
+              <span className="absolute -left-1 -top-1 h-1.5 w-1.5 border border-hud" />
+              <span className="absolute -right-1 -bottom-1 h-1.5 w-1.5 border border-hud" />
+              {d.label}
+            </div>
           </div>
         </EdgeLabelRenderer>
       )}

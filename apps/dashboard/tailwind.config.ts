@@ -34,6 +34,17 @@ const config: Config = {
         "danger-soft": "rgba(239,68,68,0.12)",
         violet: "#a855f7",
         "violet-soft": "rgba(168,85,247,0.12)",
+        // ─── Iron Man / JARVIS palette ───
+        hud: "#00d9ff",
+        "hud-dim": "rgba(0,217,255,0.35)",
+        "hud-soft": "rgba(0,217,255,0.10)",
+        "hud-glow": "rgba(0,217,255,0.55)",
+        "hud-ring": "rgba(0,217,255,0.25)",
+        gold: "#fbbf24",
+        "gold-dim": "rgba(251,191,36,0.5)",
+        "gold-soft": "rgba(251,191,36,0.10)",
+        alert: "#ff3b30",
+        "alert-glow": "rgba(255,59,48,0.5)",
       },
       fontFamily: {
         sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],

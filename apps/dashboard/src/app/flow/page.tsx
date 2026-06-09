@@ -1,27 +1,60 @@
 import { FlowViewer } from "./client";
+import "./jarvis.css";
 
 export const dynamic = "force-dynamic";
 
 export default function FlowPage() {
   return (
-    <div className="space-y-4 animate-fade-in">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tightest text-fg">Live Flow</h1>
-          <p className="mt-1 text-sm text-muted">
-            Real-time view of agent orchestration. Nodes pulse when active, edges animate when data flows. Auto-refresh every 2 seconds.
-          </p>
-        </div>
-      </header>
+    <div
+      className="jarvis-viewport relative border-y border-hud-dim"
+      style={{
+        height: "calc(100vh - 110px)",
+        marginTop: "-40px",
+        marginBottom: "-40px",
+        marginLeft: "calc(50% - 50vw)",
+        marginRight: "calc(50% - 50vw)",
+        width: "100vw",
+      }}
+    >
+      <span className="jarvis-frame tl" />
+      <span className="jarvis-frame tr" />
+      <span className="jarvis-frame bl" />
+      <span className="jarvis-frame br" />
+      <div className="jarvis-ticks" />
 
-      <div className="relative h-[820px] overflow-hidden rounded-xl border border-border bg-surface bg-card-bevel shadow-card">
-        <FlowViewer />
+      <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 font-mono text-[9px] uppercase tracking-[0.4em] text-hud-dim hud-flicker">
+        ◄ LAT 34.9°S · LON 56.1°W · ALT 0m · AICOS-LINK ►
       </div>
 
-      <p className="text-xs text-subtle">
-        Tip: hold <kbd className="rounded border border-border bg-surface-2 px-1 font-mono text-2xs">space</kbd> to pan,
-        scroll to zoom. Dotted edges = idle path, glowing edges = live traffic.
-      </p>
+      <div className="pointer-events-none absolute left-12 top-3 z-20">
+        <div className="font-mono text-base font-bold uppercase tracking-widest text-hud glow-text">
+          ◢ LIVE TACTICAL VIEW
+        </div>
+        <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+          J.A.R.V.I.S. AGENT ORCHESTRATION OVERLAY · 2s REFRESH
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute bottom-3 left-12 z-20 font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+        ◢ HOLD <kbd className="rounded border border-hud-dim bg-black px-1 py-0.5 text-hud">SPACE</kbd> PAN · SCROLL ZOOM · GLOW = TRAFFIC · VIOLET = LEARN→ROUTE
+      </div>
+
+      <div className="pointer-events-none absolute bottom-3 right-12 z-20 flex items-center gap-2 font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+        <span className="flex items-center gap-1.5">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-hud opacity-75" />
+            <span
+              className="relative inline-flex h-1.5 w-1.5 rounded-full bg-hud"
+              style={{ boxShadow: "0 0 6px #00d9ff" }}
+            />
+          </span>
+          SIGNAL · ONLINE
+        </span>
+        <span className="text-hud">▮▮▮▮▮▮▯▯</span>
+        <span>v0.1 · BUILD 09JUN26</span>
+      </div>
+
+      <FlowViewer />
     </div>
   );
 }

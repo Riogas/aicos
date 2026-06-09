@@ -1,0 +1,220 @@
+/* ═══════════════════════════════════════════════════════════════
+   JARVIS / IRON MAN HUD STYLES
+   Hex grid + scan lines + ambient cyan glow
+═══════════════════════════════════════════════════════════════ */
+
+.jarvis-viewport {
+  position: relative;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(0,217,255,0.10), transparent 70%),
+    radial-gradient(ellipse 60% 40% at 50% 100%, rgba(0,217,255,0.05), transparent 70%),
+    #000;
+  overflow: hidden;
+}
+
+/* Hex-grid pattern overlay */
+.jarvis-viewport::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    /* dual-axis hex pattern via diagonal lines */
+    linear-gradient(30deg, transparent 49.5%, rgba(0,217,255,0.05) 50%, transparent 50.5%),
+    linear-gradient(150deg, transparent 49.5%, rgba(0,217,255,0.05) 50%, transparent 50.5%),
+    linear-gradient(90deg, transparent 49.5%, rgba(0,217,255,0.03) 50%, transparent 50.5%);
+  background-size: 32px 56px, 32px 56px, 64px 64px;
+  pointer-events: none;
+  opacity: 0.6;
+  z-index: 1;
+}
+
+/* Horizontal scan line — slowly moves down */
+.jarvis-viewport::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent 0%, rgba(0,217,255,0.35) 50%, transparent 100%);
+  filter: drop-shadow(0 0 8px rgba(0,217,255,0.8));
+  animation: jarvis-scan 9s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+@keyframes jarvis-scan {
+  0%   { transform: translateY(-10px); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateY(820px); opacity: 0; }
+}
+
+/* HUD corner frame brackets on the viewport */
+.jarvis-frame {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  z-index: 3;
+  pointer-events: none;
+}
+.jarvis-frame::before,
+.jarvis-frame::after {
+  content: "";
+  position: absolute;
+  background: linear-gradient(90deg, #00d9ff, transparent);
+  filter: drop-shadow(0 0 4px rgba(0,217,255,0.8));
+}
+.jarvis-frame.tl { top: 8px; left: 8px; }
+.jarvis-frame.tl::before { top: 0; left: 0; width: 32px; height: 2px; }
+.jarvis-frame.tl::after  { top: 0; left: 0; width: 2px; height: 32px; }
+
+.jarvis-frame.tr { top: 8px; right: 8px; transform: scaleX(-1); }
+.jarvis-frame.tr::before { top: 0; left: 0; width: 32px; height: 2px; }
+.jarvis-frame.tr::after  { top: 0; left: 0; width: 2px; height: 32px; }
+
+.jarvis-frame.bl { bottom: 8px; left: 8px; transform: scaleY(-1); }
+.jarvis-frame.bl::before { top: 0; left: 0; width: 32px; height: 2px; }
+.jarvis-frame.bl::after  { top: 0; left: 0; width: 2px; height: 32px; }
+
+.jarvis-frame.br { bottom: 8px; right: 8px; transform: scale(-1, -1); }
+.jarvis-frame.br::before { top: 0; left: 0; width: 32px; height: 2px; }
+.jarvis-frame.br::after  { top: 0; left: 0; width: 2px; height: 32px; }
+
+/* Tick marks on left edge */
+.jarvis-ticks {
+  position: absolute;
+  top: 60px;
+  bottom: 60px;
+  left: 18px;
+  width: 12px;
+  z-index: 3;
+  pointer-events: none;
+}
+.jarvis-ticks::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(transparent 50%, rgba(0,217,255,0.4) 50%, rgba(0,217,255,0.4) calc(50% + 1px), transparent calc(50% + 1px));
+  background-size: 100% 12px;
+}
+
+/* Subtle data particles drifting in the background */
+@keyframes jarvis-drift {
+  from { transform: translate(0, 0); opacity: 0; }
+  10%  { opacity: 0.6; }
+  90%  { opacity: 0.6; }
+  to   { transform: translate(120px, -80px); opacity: 0; }
+}
+
+/* Hexagonal node clip — used inside SVGs as the chrome border */
+.jarvis-hex-shell {
+  clip-path: polygon(
+    25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%
+  );
+}
+
+/* React Flow overrides for JARVIS */
+.react-flow__renderer { z-index: 4; }
+.react-flow__minimap {
+  background: rgba(0,0,0,0.7) !important;
+  border: 1px solid rgba(0,217,255,0.25) !important;
+  border-radius: 6px !important;
+  filter: drop-shadow(0 0 12px rgba(0,217,255,0.3));
+}
+.react-flow__controls {
+  background: rgba(0,0,0,0.6) !important;
+  border: 1px solid rgba(0,217,255,0.25) !important;
+  border-radius: 6px !important;
+  overflow: hidden;
+}
+.react-flow__controls button {
+  background: rgba(0,217,255,0.05) !important;
+  border-bottom: 1px solid rgba(0,217,255,0.15) !important;
+  color: #00d9ff !important;
+  fill: #00d9ff !important;
+}
+.react-flow__controls button:hover {
+  background: rgba(0,217,255,0.15) !important;
+}
+.react-flow__attribution { display: none; }
+
+/* Concentric ring pulse — used inside arc-reactor node */
+@keyframes arc-pulse {
+  0%   { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+.arc-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid #00d9ff;
+  border-radius: 50%;
+  filter: drop-shadow(0 0 8px rgba(0,217,255,0.8));
+  animation: arc-pulse 2.4s ease-out infinite;
+}
+.arc-ring.d-0 { animation-delay: 0s; }
+.arc-ring.d-1 { animation-delay: 0.8s; }
+.arc-ring.d-2 { animation-delay: 1.6s; }
+
+/* Slow rotation for outer ring */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.spin-slow { animation: spin-slow 8s linear infinite; }
+.spin-slow-rev { animation: spin-slow 12s linear infinite reverse; }
+
+/* Glitch / readout flicker */
+@keyframes hud-flicker {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.85; }
+  52%      { opacity: 1; }
+  93%      { opacity: 0.7; }
+  95%      { opacity: 1; }
+}
+.hud-flicker { animation: hud-flicker 5s ease-in-out infinite; }
+
+/* Bracket frame around a node (active state) */
+.hud-bracket {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid #00d9ff;
+  filter: drop-shadow(0 0 4px rgba(0,217,255,0.9));
+}
+.hud-bracket.tl { top: -3px; left: -3px; border-right: 0; border-bottom: 0; }
+.hud-bracket.tr { top: -3px; right: -3px; border-left: 0; border-bottom: 0; }
+.hud-bracket.bl { bottom: -3px; left: -3px; border-right: 0; border-top: 0; }
+.hud-bracket.br { bottom: -3px; right: -3px; border-left: 0; border-top: 0; }
+
+/* Targeting reticle (4 corners that "lock on" an active element) */
+@keyframes target-lock {
+  0%, 100% { transform: translate(-4px, -4px); opacity: 0.5; }
+  50%      { transform: translate(0, 0); opacity: 1; }
+}
+.target-lock .hud-bracket { animation: target-lock 1.8s ease-in-out infinite; }
+
+/* Text shadow glow for HUD titles */
+.glow-text {
+  text-shadow: 0 0 6px rgba(0,217,255,0.7), 0 0 12px rgba(0,217,255,0.4);
+}
+.glow-text-gold {
+  text-shadow: 0 0 6px rgba(251,191,36,0.7);
+}
+.glow-text-alert {
+  text-shadow: 0 0 6px rgba(255,59,48,0.7);
+}
+
+/* Loading bar segments */
+.segment-bar {
+  display: inline-flex;
+  gap: 1px;
+}
+.segment-bar > span {
+  display: inline-block;
+  width: 4px;
+  height: 6px;
+  background: rgba(0,217,255,0.2);
+}
+.segment-bar > span.on {
+  background: #00d9ff;
+  box-shadow: 0 0 4px rgba(0,217,255,0.9);
+}
