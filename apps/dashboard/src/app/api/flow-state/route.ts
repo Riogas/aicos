@@ -129,17 +129,35 @@ interface AgentRosterEntry {
   id: string;
   paperclipAgentId?: string;
   name: string;
+  preferredCli?: string;
+  preferredModel?: string;
 }
 
 // Resolved once per request from the bridge registry. Used to map
-// assigneeAgentId (Paperclip UUID) → registryId (it-analyst etc.).
+// assigneeAgentId (Paperclip UUID) → registryId (it-analyst etc.) AND to
+// know which CLI each agent prefers (so the dashboard can highlight the
+// preferred edge while a run is still warming up and the learning record
+// hasn't been written yet).
 async function getAgentRoster(bridgeUrl: string): Promise<Map<string, AgentRosterEntry>> {
-  type Resp = { agents?: Array<{ id?: string; paperclipAgentId?: string; name?: string }> };
+  type Resp = {
+    agents?: Array<{
+      id?: string;
+      paperclipAgentId?: string;
+      name?: string;
+      preferredModel?: { cli?: string; model?: string };
+    }>;
+  };
   const r = await fetchSafe<Resp>(`${bridgeUrl}/admin/registry`);
   const map = new Map<string, AgentRosterEntry>();
   for (const a of r?.agents ?? []) {
     if (!a.paperclipAgentId || !a.id) continue;
-    map.set(a.paperclipAgentId, { id: a.id, paperclipAgentId: a.paperclipAgentId, name: a.name ?? a.id });
+    map.set(a.paperclipAgentId, {
+      id: a.id,
+      paperclipAgentId: a.paperclipAgentId,
+      name: a.name ?? a.id,
+      preferredCli: a.preferredModel?.cli,
+      preferredModel: a.preferredModel?.model,
+    });
   }
   return map;
 }
@@ -205,8 +223,12 @@ export async function GET() {
   const liveRuns: LiveRun[] = pcInFlight.map((iss) => {
     const personaEntry = iss.assigneeAgentId ? roster.get(iss.assigneeAgentId) : undefined;
     const recentForTicket = findRecentForTicket(iss.identifier ?? null);
-    const cli = recentForTicket?.cli ?? "?";
-    const model = recentForTicket?.model ?? "?";
+    // If we haven't seen a learning record yet (run just started, hasn't
+    // emitted recordOutcome), fall back to the persona's PREFERRED CLI/model
+    // from the registry. The dashboard can then light up the canonical edge
+    // immediately instead of waiting ~30s for the first run to complete.
+    const cli = recentForTicket?.cli ?? personaEntry?.preferredCli ?? "?";
+    const model = recentForTicket?.model ?? personaEntry?.preferredModel ?? "?";
     const provider = recentForTicket?.provider ?? inferProvider(cli, model);
 
     // triggeredBy heuristic: an in-flight ticket is "telegram" only if
@@ -320,19 +342,30 @@ export async function GET() {
           critical: quota.criticalProvider,
           survival: quota.survivalActive,
           providers: Object.fromEntries(
-            Object.entries(quota.providers).map(([k, v]) => [
-              k,
-              {
-                usedCostUsd: v.usedCostUsd,
-                requests: v.requests,
-                available: v.available,
-                pct: v.budget?.maxCostUsd
-                  ? Math.min(100, (v.usedCostUsd / v.budget.maxCostUsd) * 100)
-                  : v.budget?.maxRequests
-                    ? Math.min(100, (v.requests / v.budget.maxRequests) * 100)
-                    : 0,
-              },
-            ]),
+            Object.entries(quota.providers).map(([k, v]) => {
+              // The bar should show the MAX of cost-saturation and request-
+              // saturation, not just cost. Reason: codex (openai) and agy
+              // (google) CLIs do NOT emit cost data, so usedCostUsd stays at
+              // $0 and the bar would always read 0% even after dozens of
+              // runs. Using max(cost%, requests%) makes the bar reflect real
+              // activity regardless of whether the CLI reports cost.
+              const costPct = v.budget?.maxCostUsd
+                ? (v.usedCostUsd / v.budget.maxCostUsd) * 100
+                : 0;
+              const reqPct = v.budget?.maxRequests
+                ? (v.requests / v.budget.maxRequests) * 100
+                : 0;
+              const pct = Math.min(100, Math.max(costPct, reqPct));
+              return [
+                k,
+                {
+                  usedCostUsd: v.usedCostUsd,
+                  requests: v.requests,
+                  available: v.available,
+                  pct,
+                },
+              ];
+            }),
           ),
           clis: Object.fromEntries(
             Object.entries(quota.clis).map(([k, v]) => [

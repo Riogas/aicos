@@ -418,6 +418,8 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     edges.push({
       id: `e-bridge-${w.id}`,
       source: "bridge",
+      // Right-side handle so worker fan-out doesn't share the bottom services bus.
+      sourceHandle: "to-workers",
       target: `w-${w.id}`,
       type: "animated",
       data: {
@@ -461,30 +463,29 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
       });
     }
   }
-  // Static greyed-out edges from all workers to their canonical first CLI choice
-  // (so the topology is visible even when idle)
-  const idlePairs: Array<[string, string]> = [
-    ["w-it-analyst", "cli-claude"],
-    ["w-it-architect", "cli-claude"],
-    ["w-it-implementer", "cli-codex"],
-    ["w-it-code-reviewer", "cli-claude"],
-    ["w-it-security-reviewer", "cli-claude"],
-    ["w-it-documenter", "cli-agy"],
-    ["w-it-ui-ux-validator", "cli-claude"],
-    ["w-marketing-strategist", "cli-claude"],
-    ["w-marketing-copywriter", "cli-codex"],
-    ["w-research-market", "cli-opencode"],
-  ];
-  for (const [w, c] of idlePairs) {
-    const id = `e-idle-${w}-${c}`;
-    if (!edges.find((e) => e.source === w && e.target === c)) {
-      edges.push({
-        id,
-        source: w,
-        target: c,
-        type: "animated",
-        data: { active: false, tone: "idle" },
-      });
+  // Every worker can reach every CLI thanks to the fallback chain (registry
+  // says preferred + 4 fallbacks per agent, and at least one of them touches
+  // each CLI). Draw faded idle edges from each worker to EVERY CLI so the
+  // topology is honest — a live edge from the loop above will overlay this
+  // one with bright colour when that worker is actually using that CLI.
+  const ALL_CLIS = ["claude", "codex", "agy", "opencode"];
+  for (const w of WORKERS) {
+    for (const c of ALL_CLIS) {
+      const wid = `w-${w.id}`;
+      const cid = `cli-${c}`;
+      const id = `e-idle-${wid}-${cid}`;
+      const hasLiveOverlay = edges.some(
+        (e) => e.source === wid && e.target === cid && e.data?.tone === "live",
+      );
+      if (!edges.find((e) => e.id === id) && !hasLiveOverlay) {
+        edges.push({
+          id,
+          source: wid,
+          target: cid,
+          type: "animated",
+          data: { active: false, tone: "idle" },
+        });
+      }
     }
   }
 
@@ -594,6 +595,10 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     edges.push({
       id: `e-bridge-s-${sv.id}`,
       source: "bridge",
+      // Bridge has two source handles: "to-workers" (right) and "to-services"
+      // (bottom). Services go through the bottom one so the cables don't tangle
+      // with the worker fan-out on the right side.
+      sourceHandle: "to-services",
       target: `s-${sv.id}`,
       type: "animated",
       data: { active: sv.live, tone: sv.live ? "live" : "idle" },

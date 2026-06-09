@@ -177,11 +177,20 @@ function NodeBody({
   );
 }
 
-function HandleStyled({ position, type }: { position: Position; type: "source" | "target" }) {
+function HandleStyled({
+  position,
+  type,
+  id,
+}: {
+  position: Position;
+  type: "source" | "target";
+  id?: string;
+}) {
   return (
     <Handle
       type={type}
       position={position}
+      id={id}
       className="!h-1.5 !w-1.5 !border-0 !bg-hud"
       style={{ boxShadow: "0 0 4px rgba(0,217,255,0.9)" }}
     />
@@ -309,8 +318,9 @@ export function BridgeNode({ data }: NodeProps) {
         </div>
       </div>
       <HandleStyled type="target" position={Position.Left} />
-      <HandleStyled type="source" position={Position.Right} />
-      <HandleStyled type="source" position={Position.Bottom} />
+      {/* Named handles so edges can pick which side they leave from. */}
+      <HandleStyled type="source" position={Position.Right} id="to-workers" />
+      <HandleStyled type="source" position={Position.Bottom} id="to-services" />
     </div>
   );
 }
@@ -365,16 +375,19 @@ export function ProviderNode({ data }: NodeProps) {
   };
   const tone: Tone = !d.available ? "err" : (d.pct ?? 0) >= 80 ? "warn" : d.active ? "live" : d.critical ? "accent" : "idle";
   const pct = Math.round(d.pct ?? 0);
+  // Tooltip clarifies that the bar is a LOCAL counter, not the real session
+  // usage exposed by the provider's web UI / interactive CLI commands.
+  const tooltip = `Local Quota Manager budget — NOT real provider session usage.\nFor Anthropic Max-Plan, run /usage inside Claude Code to see real session %.\nFor pay-as-you-go API keys, configure LiteLLM and point the bridge at it.`;
   return (
     <>
       <HexShell tone={tone} live={d.active} critical={d.critical} width={180} height={58}>
         <NodeBody
           icon={Cpu}
           title={d.name.toUpperCase()}
-          subtitle={d.critical ? "CRITICAL" : "PROVIDER"}
+          subtitle={d.critical ? "CRITICAL · LOCAL" : "PROVIDER · LOCAL"}
           tone={tone}
           detail={
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" title={tooltip}>
               <span>{d.requests ?? 0}R</span>
               <div className="h-0.5 w-10 overflow-hidden bg-hud-soft">
                 <div
