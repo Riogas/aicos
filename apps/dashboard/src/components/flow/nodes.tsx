@@ -252,14 +252,14 @@ export function BridgeNode({ data }: NodeProps) {
   const color = d.live ? "#00d9ff" : d.healthy ? "#00d9ff" : "#ff3b30";
   const size = 130;
   return (
-    <div className="relative" style={{ width: size, height: size }}>
-      {/* Outer rotating ring with notches */}
+    <div className={`relative ${d.live ? "reactor-beat" : ""}`} style={{ width: size, height: size }}>
+      {/* Outer rotating ring with notches — fast when live */}
       <svg
         width={size}
         height={size}
         viewBox="0 0 100 100"
-        className="absolute inset-0 spin-slow"
-        style={{ filter: `drop-shadow(0 0 8px ${color})` }}
+        className={`absolute inset-0 ${d.live ? "spin-fast" : "spin-slow"}`}
+        style={{ filter: `drop-shadow(0 0 ${d.live ? 14 : 8}px ${color})` }}
       >
         <circle cx="50" cy="50" r="48" fill="none" stroke={color} strokeWidth="0.6" strokeDasharray="2 4" opacity="0.6" />
         {Array.from({ length: 12 }).map((_, i) => {
@@ -271,12 +271,12 @@ export function BridgeNode({ data }: NodeProps) {
           return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth="1" />;
         })}
       </svg>
-      {/* Counter-rotating mid ring */}
+      {/* Counter-rotating mid ring — fast when live */}
       <svg
         width={size}
         height={size}
         viewBox="0 0 100 100"
-        className="absolute inset-0 spin-slow-rev"
+        className={`absolute inset-0 ${d.live ? "spin-fast-rev" : "spin-slow-rev"}`}
       >
         <circle cx="50" cy="50" r="38" fill="none" stroke={color} strokeWidth="0.4" strokeDasharray="8 6" opacity="0.5" />
       </svg>
@@ -295,6 +295,9 @@ export function BridgeNode({ data }: NodeProps) {
           <div className="arc-ring d-0" style={{ borderColor: color }} />
           <div className="arc-ring d-1" style={{ borderColor: color }} />
           <div className="arc-ring d-2" style={{ borderColor: color }} />
+          {/* Wide sonar sweep — big ripples when live */}
+          <div className="arc-sonar d-0" style={{ borderColor: color }} />
+          <div className="arc-sonar d-1" style={{ borderColor: color }} />
         </>
       )}
       {/* Center label */}

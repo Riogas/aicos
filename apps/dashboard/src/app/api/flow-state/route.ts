@@ -61,34 +61,97 @@ interface BridgeHealth {
   registry?: { resolvableAgents?: number };
 }
 
+interface InFlightItem {
+  runId: string;
+  persona?: string;
+  personaName?: string;
+  cli?: string;
+  model?: string;
+  ticketIdentifier?: string;
+  startedAt: string;
+}
+
+// Simple cli→provider mapping (mirror of bridge provider-map.ts)
+function inferProvider(cli: string | undefined, model: string | undefined): string {
+  if (!cli) return "unknown";
+  switch (cli) {
+    case "claude":
+      return "anthropic";
+    case "codex":
+      return "openai";
+    case "agy":
+      return "google";
+    case "opencode": {
+      if (!model) return "unknown";
+      const m = model.toLowerCase();
+      if (m.includes("free")) return "opencode-free";
+      if (m.startsWith("openai/") || m.includes("gpt-")) return "openai";
+      if (m.startsWith("anthropic/") || m.includes("claude")) return "anthropic";
+      if (m.startsWith("google/") || m.startsWith("gemini")) return "google";
+      if (m.startsWith("moonshotai/") || m.includes("kimi")) return "moonshot";
+      if (m.startsWith("xiaomi/") || m.includes("mimo")) return "xiaomi";
+      return "unknown";
+    }
+    case "hermes":
+      if (!model) return "openai";
+      const slash = model.indexOf("/");
+      return slash > 0 ? model.slice(0, slash).toLowerCase() : "openai";
+    default:
+      return "unknown";
+  }
+}
+
 export async function GET() {
   const QUOTA = process.env.QUOTA_SERVICE_URL || "http://localhost:7001";
   const LEARNING = process.env.LEARNING_SERVICE_URL || "http://localhost:7003";
   const BRIDGE = process.env.BRIDGE_SERVICE_URL || "http://localhost:7100";
   const GATEWAY = process.env.GATEWAY_SERVICE_URL || "http://localhost:7004";
 
-  const [quota, recent, bridge, audit] = await Promise.all([
+  const [quota, recent, bridge, audit, inFlight] = await Promise.all([
     fetchSafe<QuotaSnapshot>(`${QUOTA}/status`),
     fetchSafe<{ items: RecentRun[] }>(`${LEARNING}/recent`),
     fetchSafe<BridgeHealth>(`${BRIDGE}/health`),
     fetchSafe<{ items: AuditEntry[] }>(`${GATEWAY}/audit/recent`),
+    fetchSafe<{ count: number; items: InFlightItem[] }>(`${BRIDGE}/in-flight`),
   ]);
 
   const now = Date.now();
   const items = (recent?.items ?? []).slice(0, 12);
 
-  // Detect "currently running" — the most recent run within last 90s
-  const liveRun = items.find((r) => {
-    if (!r.ts) return false;
-    const age = now - new Date(r.ts).getTime();
-    return age >= 0 && age < 90_000;
-  });
+  // Detect "currently in flight" — prefer the bridge's in-flight tracker,
+  // fall back to the most recent completed run within last 90s for narration purposes.
+  const inFlightItem = inFlight?.items?.[0];
+  const inFlightLive = inFlightItem
+    ? {
+        provider: inFlightItem.model ? inferProvider(inFlightItem.cli, inFlightItem.model) : "unknown",
+        cli: inFlightItem.cli ?? "?",
+        model: inFlightItem.model ?? "?",
+        taskType: "other",
+        success: true, // placeholder — only known after completion
+        durationMs: now - new Date(inFlightItem.startedAt).getTime(),
+        costUsd: 0,
+        agentRegistryId: inFlightItem.persona,
+        ticketId: inFlightItem.ticketIdentifier ?? null,
+        ts: inFlightItem.startedAt,
+        inFlight: true,
+      }
+    : null;
+  const liveRun =
+    inFlightLive ??
+    items.find((r) => {
+      if (!r.ts) return false;
+      const age = now - new Date(r.ts).getTime();
+      return age >= 0 && age < 90_000;
+    });
 
   // Which workers / clis / providers have been ACTIVE recently (last 60s)
   const activeWindow = 60_000;
   const activeWorkers = new Set<string>();
   const activeClis = new Set<string>();
   const activeProviders = new Set<string>();
+  if (inFlightItem?.persona) activeWorkers.add(inFlightItem.persona);
+  if (inFlightItem?.cli) activeClis.add(inFlightItem.cli);
+  if (inFlightLive?.provider) activeProviders.add(inFlightLive.provider);
   for (const r of items) {
     if (!r.ts) continue;
     if (now - new Date(r.ts).getTime() > activeWindow) continue;

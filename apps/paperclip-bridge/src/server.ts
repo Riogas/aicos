@@ -59,6 +59,18 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
 
   const quotaClient = createQuotaClient(opts.quotaServiceUrl);
   const learningClient = createLearningClient(opts.learningServiceUrl);
+
+  // ─── In-flight run tracking (for live dashboard heartbeat) ───────────────
+  interface InFlight {
+    runId: string;
+    persona?: string;
+    personaName?: string;
+    cli?: string;
+    model?: string;
+    ticketIdentifier?: string;
+    startedAt: string;
+  }
+  const inFlight = new Map<string, InFlight>();
   app.log.info(
     {
       quotaEnabled: quotaClient.isEnabled(),
@@ -81,6 +93,11 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
       loaded: registryStats.registryLoaded && registryStats.keysLoaded,
       resolvableAgents: registryStats.resolvable,
     },
+  }));
+
+  app.get("/in-flight", async () => ({
+    count: inFlight.size,
+    items: Array.from(inFlight.values()),
   }));
 
   app.post("/admin/reload-registry", async () => {
@@ -255,6 +272,17 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         });
       }
 
+      const flightKey = parsed.runId || `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      inFlight.set(flightKey, {
+        runId: flightKey,
+        persona: persona?.registryId,
+        personaName: persona?.agentName,
+        cli: persona?.preferredModel?.cli,
+        model: persona?.preferredModel?.model,
+        ticketIdentifier: ctxIssue?.identifier as string | undefined,
+        startedAt: new Date().toISOString(),
+      });
+
       setImmediate(async () => {
         try {
           const result = await executeRun({
@@ -288,6 +316,8 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
             { err: (e as Error).message, issueId, runId: parsed.runId },
             "run failed",
           );
+        } finally {
+          inFlight.delete(flightKey);
         }
       });
 

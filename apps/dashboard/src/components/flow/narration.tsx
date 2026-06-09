@@ -17,17 +17,53 @@ interface LiveRunSig {
   provider: string;
   taskType: string;
   durationMs: number;
+  success?: boolean;
+  costUsd?: number;
   ticketId?: string | null;
   ts: string;
 }
 
+interface ProviderSig {
+  usedCostUsd: number;
+  requests: number;
+  available: boolean;
+  pct: number;
+}
+
 interface FlowSnapshot {
   liveRun?: LiveRunSig | null;
-  quota?: { survival?: boolean } | null;
+  quota?: {
+    survival?: boolean;
+    providers?: Record<string, ProviderSig>;
+  } | null;
   bridge?: { healthy?: boolean };
   recentToolCalls?: Array<{ ts: string; tool: string; actor: string; decision: string }>;
   activeWorkers?: string[];
+  recent?: Array<{
+    persona: string;
+    cli: string;
+    model: string;
+    provider: string;
+    success: boolean;
+    durationMs: number;
+    costUsd: number;
+    ts: string;
+  }>;
 }
+
+/* Canonical "first choice" CLI per persona — used to detect smart re-route */
+const PREFERRED_CLI: Record<string, string> = {
+  "it-analyst": "claude",
+  "it-architect": "claude",
+  "it-implementer": "codex",
+  "it-code-reviewer": "claude",
+  "it-security-reviewer": "claude",
+  "it-documenter": "agy",
+  "it-ui-ux-validator": "claude",
+  "marketing-strategist": "claude",
+  "marketing-copywriter": "codex",
+  "research-market": "opencode",
+};
 
 /**
  * Derives notification events from snapshot state changes.
@@ -55,6 +91,84 @@ function deriveEvents(prev: FlowSnapshot | null, curr: FlowSnapshot): FlowEvent[
       source: "QUOTA",
       message: `◢ ROUTING TO ${run.model.split("/").pop()?.toUpperCase()} · PROVIDER ${run.provider.toUpperCase()}`,
     });
+
+    // SMART ROUTE detection: when the chosen cli is NOT the persona's preferred default
+    const preferred = PREFERRED_CLI[run.persona];
+    if (preferred && preferred !== run.cli && !curr.quota?.survival) {
+      events.push({
+        id: `smart-${run.ts}`,
+        ts: now + 2,
+        tone: "accent",
+        source: "LEARNING",
+        message: `◢ SMART RE-ROUTE · ${preferred.toUpperCase()} → ${run.cli.toUpperCase()} · BETTER HIST. SCORE`,
+      });
+    }
+  }
+
+  // Live run COMPLETED — fire commit + comment events
+  if (prev?.liveRun && (!curr.liveRun || curr.liveRun.persona !== prev.liveRun.persona)) {
+    const done = prev.liveRun;
+    // Find the corresponding completed entry in curr.recent
+    const recentMatch = (curr.recent ?? []).find(
+      (r) => r.persona === done.persona && Math.abs(new Date(r.ts).getTime() - new Date(done.ts).getTime()) < 120_000,
+    );
+    if (recentMatch?.success) {
+      events.push({
+        id: `commit-${done.ts}-${done.persona}`,
+        ts: now,
+        tone: "ok",
+        source: "GIT",
+        message: `◢ AUTO-COMMIT · ${done.persona.toUpperCase()}${done.ticketId ? ` · ${done.ticketId.slice(0, 12)}` : ""}`,
+      });
+      events.push({
+        id: `comment-${done.ts}`,
+        ts: now + 1,
+        tone: "live",
+        source: "PAPERCLIP",
+        message: `▸ COMMENT POSTED · ${done.ticketId?.slice(0, 12) ?? "WORKSPACE"} · STATUS DONE`,
+      });
+      events.push({
+        id: `learn-${done.ts}`,
+        ts: now + 2,
+        tone: "accent",
+        source: "LEARNING",
+        message: `◢ OUTCOME RECORDED · ${done.persona.toUpperCase()} · ${recentMatch.success ? "OK" : "FAIL"} · $${recentMatch.costUsd.toFixed(4)}`,
+      });
+    } else if (recentMatch && !recentMatch.success) {
+      events.push({
+        id: `fail-${done.ts}`,
+        ts: now,
+        tone: "err",
+        source: "BRIDGE",
+        message: `✕ EXECUTION FAILED · ${done.persona.toUpperCase()} · EXIT ≠ 0`,
+      });
+    }
+  }
+
+  // PROVIDER nearing limit (>= 70% pct), only fire once per provider per threshold crossing
+  for (const [name, p] of Object.entries(curr.quota?.providers ?? {})) {
+    const prevP = prev?.quota?.providers?.[name];
+    const wasUnder = !prevP || prevP.pct < 70;
+    const nowOver = p.pct >= 70 && p.pct < 95;
+    const nowCritical = p.pct >= 95;
+    if (wasUnder && nowOver) {
+      events.push({
+        id: `prov-warn-${name}-${Math.floor(now / 60000)}`,
+        ts: now,
+        tone: "warn",
+        source: "QUOTA",
+        message: `⚠ ${name.toUpperCase()} AT ${Math.round(p.pct)}% BUDGET · APPROACHING LIMIT`,
+      });
+    }
+    if ((!prevP || prevP.pct < 95) && nowCritical) {
+      events.push({
+        id: `prov-crit-${name}-${Math.floor(now / 60000)}`,
+        ts: now,
+        tone: "err",
+        source: "QUOTA",
+        message: `✕ ${name.toUpperCase()} AT ${Math.round(p.pct)}% · NEAR EXHAUSTION`,
+      });
+    }
   }
 
   // Survival mode flipped on

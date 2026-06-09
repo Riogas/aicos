@@ -162,6 +162,37 @@
 .spin-slow { animation: spin-slow 8s linear infinite; }
 .spin-slow-rev { animation: spin-slow 12s linear infinite reverse; }
 
+/* Reactor heartbeat — used when live=true to make the bridge throb */
+@keyframes reactor-heartbeat {
+  0%   { transform: scale(1); filter: drop-shadow(0 0 6px #00d9ff); }
+  25%  { transform: scale(1.055); filter: drop-shadow(0 0 14px #00d9ff) drop-shadow(0 0 32px #00d9ff); }
+  40%  { transform: scale(1.02); filter: drop-shadow(0 0 8px #00d9ff); }
+  60%  { transform: scale(1.05); filter: drop-shadow(0 0 14px #00d9ff) drop-shadow(0 0 28px #00d9ff); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 6px #00d9ff); }
+}
+.reactor-beat { animation: reactor-heartbeat 0.85s ease-in-out infinite; }
+
+/* When live, outer ring spins faster */
+.spin-fast { animation: spin-slow 3s linear infinite; }
+.spin-fast-rev { animation: spin-slow 5s linear infinite reverse; }
+
+/* Bigger sonar-style sweep ring (one large outer pulse when live) */
+@keyframes arc-sonar {
+  0%   { transform: scale(0.5); opacity: 0.7; border-width: 2px; }
+  100% { transform: scale(2.6); opacity: 0; border-width: 0.4px; }
+}
+.arc-sonar {
+  position: absolute;
+  inset: 0;
+  border: 2px solid #00d9ff;
+  border-radius: 50%;
+  filter: drop-shadow(0 0 10px rgba(0,217,255,0.9));
+  animation: arc-sonar 2.4s ease-out infinite;
+  pointer-events: none;
+}
+.arc-sonar.d-0 { animation-delay: 0s; }
+.arc-sonar.d-1 { animation-delay: 1.2s; }
+
 /* Narration card slide-in / fade-out */
 @keyframes narration-in {
   0%   { transform: translateX(-16px); opacity: 0; filter: blur(2px); }
