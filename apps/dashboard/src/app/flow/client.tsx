@@ -38,6 +38,8 @@ interface LiveRunEntry {
   triggeredBy: "telegram" | "paperclip" | "manual";
   startedAt: string;
   ageMs: number;
+  /** dispatched | memory-retrieve | quota-select | cli-running | posting-result | done */
+  stage?: string | null;
 }
 
 interface TreeEntry {
@@ -267,10 +269,11 @@ export function FlowViewer() {
                 <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">
                   ▶ {state.liveRuns.length} CONCURRENT
                 </div>
-                <div className="mt-1 max-h-24 overflow-hidden font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+                <div className="mt-1 max-h-32 overflow-hidden font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
                   {state.liveRuns.slice(0, 6).map((r, i) => (
                     <div key={i} className="truncate">
                       {r.ticketIdentifier ?? "?"} · {r.persona} · {r.cli !== "?" ? r.cli : "wait"}
+                      {r.stage ? ` · ${r.stage}` : ""}
                     </div>
                   ))}
                 </div>
@@ -425,7 +428,9 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
       data: {
         active: isHistoricActive || isLiveNow,
         tone: isLiveNow ? "live" : isHistoricActive ? "accent" : "idle",
-        label: isLiveNow ? myLiveRun?.ticketIdentifier ?? undefined : undefined,
+        label: isLiveNow
+          ? `${myLiveRun?.ticketIdentifier ?? ""}${myLiveRun?.stage ? ` · ${myLiveRun.stage}` : ""}`
+          : undefined,
       },
     });
   }

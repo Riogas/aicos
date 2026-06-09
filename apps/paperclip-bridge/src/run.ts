@@ -13,6 +13,7 @@ import {
 import type { QuotaClient } from "./quota-client.js";
 import { buildCandidates, inferProvider } from "./provider-map.js";
 import type { LearningClient } from "./learning-client.js";
+import type { InFlightTracker } from "./in-flight-tracker.js";
 
 interface CommitResult {
   attempted: boolean;
@@ -150,6 +151,10 @@ export interface ExecuteRunInput {
   quotaClient?: QuotaClient;
   learningClient?: LearningClient;
   task?: "trivial" | "bug-fix" | "small-feature" | "critical" | "large-context";
+  /** Optional in-flight tracker. Used to emit stage transitions for SSE. */
+  tracker?: InFlightTracker;
+  /** Key used by the tracker to identify this run. Defaults to nothing (no stage events). */
+  runId?: string;
 }
 
 export interface ExecuteRunResult {
@@ -188,10 +193,20 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     }
   }
 
+  const reportStage = (
+    stage: "memory-retrieve" | "quota-select" | "cli-running" | "posting-result",
+    patch?: { cli?: string; model?: string },
+  ) => {
+    if (input.tracker && input.runId) {
+      input.tracker.setStage(input.runId, stage, patch);
+    }
+  };
+
   // Memory retrieval (L4 — 4 scopes). Done ONCE before the retry loop because
   // memory context doesn't depend on which CLI we end up using.
   let memoryBlock = "";
   if (input.persona) {
+    reportStage("memory-retrieve");
     try {
       const mems = await retrieveAllScopes(input.prompt, {
         registryId: input.persona.registryId,
@@ -267,6 +282,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
       );
       if (remaining.length === 0) break;
 
+      reportStage("quota-select");
       // Ask quota for the best usable candidate from what's left. Quota
       // applies hard-rules + provider availability (incl. cooldowns) + survival
       // overlay. If it can't pick any, we're done.
@@ -322,6 +338,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         continue;
       }
 
+      reportStage("cli-running", { cli: chosen.cli, model: chosen.model });
       const t0 = Date.now();
       const result = await invokeCli({
         cli,
@@ -598,6 +615,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     // but gate sending behind an env flag to avoid noisy 403s in normal
     // operation. The bridge falls back to plain body posts which always work.
     const enrichEnabled = process.env.PAPERCLIP_ENRICH_COMMENTS === "true";
+    reportStage("posting-result");
     try {
       await pc.client.postComment(
         pc.issueId,

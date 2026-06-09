@@ -19,6 +19,7 @@ import {
 } from "./memory.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
+import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
 
 const RunRequestSchema = z.object({
   issueId: z.string().optional(),
@@ -69,16 +70,10 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   const learningClient = createLearningClient(opts.learningServiceUrl);
 
   // ─── In-flight run tracking (for live dashboard heartbeat) ───────────────
-  interface InFlight {
-    runId: string;
-    persona?: string;
-    personaName?: string;
-    cli?: string;
-    model?: string;
-    ticketIdentifier?: string;
-    startedAt: string;
-  }
-  const inFlight = new Map<string, InFlight>();
+  // Stage-aware tracker shared between the HTTP /run path (in-process emit) and
+  // the process-adapter path (POST /stage from inside the Paperclip container).
+  // Emits SSE events on every transition.
+  const tracker = new InFlightTracker();
   app.log.info(
     {
       quotaEnabled: quotaClient.isEnabled(),
@@ -103,10 +98,84 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     },
   }));
 
-  app.get("/in-flight", async () => ({
-    count: inFlight.size,
-    items: Array.from(inFlight.values()),
-  }));
+  app.get("/in-flight", async () => {
+    const items = tracker.list();
+    return { count: items.length, items };
+  });
+
+  // ─── SSE stream of tracker events ────────────────────────────────────────
+  // Connect via EventSource("/events"). Each event is a JSON line with
+  // type ∈ {start, stage, update, end} plus the full run state. The dashboard
+  // uses this to glow worker boxes per stage in real time without polling.
+  app.get("/events", async (req, reply) => {
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering
+    reply.raw.write(": connected\n\n");
+    // Replay current state so a fresh client sees what's already running.
+    for (const run of tracker.list()) {
+      reply.raw.write(
+        `event: snapshot\ndata: ${JSON.stringify({ run })}\n\n`,
+      );
+    }
+    const onEvent = (evt: TrackerEvent) => {
+      try {
+        reply.raw.write(`event: ${evt.type}\ndata: ${JSON.stringify(evt)}\n\n`);
+      } catch (e) {
+        // Connection probably closed
+        cleanup();
+      }
+    };
+    const heartbeat = setInterval(() => {
+      try {
+        reply.raw.write(": ping\n\n");
+      } catch {
+        cleanup();
+      }
+    }, 15_000);
+    const cleanup = () => {
+      tracker.off("event", onEvent);
+      clearInterval(heartbeat);
+    };
+    tracker.on("event", onEvent);
+    req.raw.on("close", cleanup);
+    req.raw.on("error", cleanup);
+  });
+
+  // POST /stage — reports from the process-mode subprocess that runs inside the
+  // Paperclip container. Body: { runId, stage, persona?, personaName?,
+  // ticketIdentifier?, cli?, model? }. The first call starts the run; later
+  // calls only update the stage + any new fields.
+  const StageEventSchema = z.object({
+    runId: z.string().min(1),
+    stage: z.enum([
+      "dispatched",
+      "memory-retrieve",
+      "quota-select",
+      "cli-running",
+      "posting-result",
+      "done",
+    ]),
+    persona: z.string().optional(),
+    personaName: z.string().optional(),
+    ticketIdentifier: z.string().optional(),
+    cli: z.string().optional(),
+    model: z.string().optional(),
+  });
+  app.post("/stage", async (req, reply) => {
+    const parsed = StageEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "validation", details: parsed.error.flatten() });
+    }
+    const { runId, stage, ...rest } = parsed.data;
+    const existing = tracker.get(runId);
+    if (!existing) {
+      tracker.start({ runId, ...rest });
+    }
+    tracker.setStage(runId, stage as RunStage, rest);
+    return { ok: true, stage, runId };
+  });
 
   app.post("/admin/reload-registry", async () => {
     const s = loadRegistry();
@@ -377,14 +446,13 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
       }
 
       const flightKey = parsed.runId || `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      inFlight.set(flightKey, {
+      tracker.start({
         runId: flightKey,
         persona: persona?.registryId,
         personaName: persona?.agentName,
         cli: persona?.preferredModel?.cli,
         model: persona?.preferredModel?.model,
         ticketIdentifier: ctxIssue?.identifier as string | undefined,
-        startedAt: new Date().toISOString(),
       });
 
       setImmediate(async () => {
@@ -402,6 +470,8 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
                 : undefined,
             quotaClient,
             learningClient,
+            tracker,
+            runId: flightKey,
           });
           app.log.info(
             {
@@ -421,7 +491,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
             "run failed",
           );
         } finally {
-          inFlight.delete(flightKey);
+          tracker.setStage(flightKey, "done");
         }
       });
 

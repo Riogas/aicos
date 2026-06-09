@@ -59,6 +59,47 @@ interface PaperclipIssueListItem {
 
 const TIMEOUT_MS = 8000;
 
+/**
+ * URL where the bridge HTTP server (running on the host) accepts stage events.
+ * Inside the Paperclip container, the host is reachable as host.docker.internal.
+ * Falls back to localhost when invoked directly on the host (manual CLI test).
+ */
+const BRIDGE_EVENT_URL =
+  process.env.BRIDGE_EVENT_URL ?? "http://host.docker.internal:7100/stage";
+
+async function reportStage(
+  stage:
+    | "dispatched"
+    | "memory-retrieve"
+    | "quota-select"
+    | "cli-running"
+    | "posting-result"
+    | "done",
+  payload: {
+    runId: string;
+    persona?: string;
+    personaName?: string;
+    ticketIdentifier?: string;
+    cli?: string;
+    model?: string;
+  },
+): Promise<void> {
+  if (!payload.runId) return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    await fetch(BRIDGE_EVENT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage, ...payload }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+  } catch {
+    // Best-effort: missing tracker reports must not break the actual run.
+  }
+}
+
 async function fetchAssignedIssues(
   apiUrl: string,
   apiKey: string,
@@ -159,6 +200,19 @@ export async function runPaperclipProcessMode(): Promise<number> {
     `[process-mode] picked ${issue.identifier ?? issue.id} (status=${issue.status}) for ${persona.registryId}\n`,
   );
 
+  // Synthesize a stable runId for the tracker if Paperclip didn't pass one.
+  // Without a runId we cannot tie stage events together; the bridge tracker
+  // would create one synthetic run per event.
+  const effectiveRunId = runId ?? `process-${issue.id}-${Date.now()}`;
+
+  // Tell the dashboard "this agent is now actively in flight on this ticket".
+  await reportStage("dispatched", {
+    runId: effectiveRunId,
+    persona: persona.registryId,
+    personaName: persona.agentName,
+    ticketIdentifier: issue.identifier ?? undefined,
+  });
+
   // Build workspace from project_id mapping (registry/project-workspaces.json)
   const workspace = issue.projectId ? resolveWorkspaceByProjectId(issue.projectId) : null;
 
@@ -178,6 +232,22 @@ export async function runPaperclipProcessMode(): Promise<number> {
   const quotaClient = createQuotaClient(process.env.QUOTA_SERVICE_URL);
   const learningClient = createLearningClient(process.env.LEARNING_SERVICE_URL);
 
+  // Bridge HTTP tracker isn't reachable from inside this subprocess (different
+  // address space), so we wire executeRun with a lightweight tracker shim that
+  // POSTs each stage change to the bridge via reportStage().
+  const remoteTracker = {
+    setStage: (rid: string, stage: string, extra?: { cli?: string; model?: string }) => {
+      void reportStage(stage as never, {
+        runId: rid,
+        persona: persona.registryId,
+        personaName: persona.agentName,
+        ticketIdentifier: issue.identifier ?? undefined,
+        cli: extra?.cli,
+        model: extra?.model,
+      });
+    },
+  } as unknown as Parameters<typeof executeRun>[0]["tracker"];
+
   const result = await executeRun({
     prompt,
     persona,
@@ -186,6 +256,17 @@ export async function runPaperclipProcessMode(): Promise<number> {
     paperclip: { client: pcClient, issueId: issue.id },
     quotaClient,
     learningClient,
+    tracker: remoteTracker,
+    runId: effectiveRunId,
+  });
+
+  // Final transition — the bridge will keep the entry around for DONE_TTL_MS
+  // so SSE clients see the closing event.
+  await reportStage("done", {
+    runId: effectiveRunId,
+    persona: persona.registryId,
+    personaName: persona.agentName,
+    ticketIdentifier: issue.identifier ?? undefined,
   });
 
   const summary = {

@@ -77,6 +77,18 @@ interface BridgeHealth {
   registry?: { resolvableAgents?: number };
 }
 
+interface BridgeInFlightItem {
+  runId: string;
+  persona?: string;
+  personaName?: string;
+  cli?: string;
+  model?: string;
+  ticketIdentifier?: string;
+  startedAt: string;
+  stage?: string;
+  stageHistory?: Array<{ stage: string; at: string }>;
+}
+
 interface PaperclipIssue {
   id: string;
   identifier?: string | null;
@@ -167,6 +179,7 @@ export async function GET() {
   const LEARNING = process.env.LEARNING_SERVICE_URL || "http://localhost:7003";
   const BRIDGE = process.env.BRIDGE_SERVICE_URL || "http://localhost:7100";
   const GATEWAY = process.env.GATEWAY_SERVICE_URL || "http://localhost:7004";
+  const POLICY = process.env.POLICY_SERVICE_URL || "http://localhost:7002";
   const PAPERCLIP = process.env.PAPERCLIP_API_URL || "http://localhost:3100";
   const PAPERCLIP_KEY = process.env.PAPERCLIP_API_KEY;
   const COMPANY_ID = process.env.AICOS_COMPANY_ID;
@@ -179,13 +192,15 @@ export async function GET() {
       ? `${PAPERCLIP}/api/companies/${COMPANY_ID}/issues?status=in_progress&includeBlockedBy=true`
       : null;
 
-  const [quota, recent, bridge, audit, paperclipInProgress, roster] = await Promise.all([
+  const [quota, recent, bridge, audit, policyAudit, paperclipInProgress, roster, bridgeInFlight] = await Promise.all([
     fetchSafe<QuotaSnapshot>(`${QUOTA}/status`),
     fetchSafe<{ items: RecentRun[] }>(`${LEARNING}/recent`),
     fetchSafe<BridgeHealth>(`${BRIDGE}/health`),
     fetchSafe<{ items: AuditEntry[] }>(`${GATEWAY}/audit/recent`),
+    fetchSafe<{ items: Array<{ ts: string; decision: string }> }>(`${POLICY}/audit/recent?limit=20`),
     paperclipIssuesUrl ? fetchSafe<{ items: PaperclipIssue[] } | PaperclipIssue[]>(paperclipIssuesUrl, pcHeaders) : Promise.resolve(null),
     getAgentRoster(BRIDGE),
+    fetchSafe<{ items: BridgeInFlightItem[] }>(`${BRIDGE}/in-flight`),
   ]);
 
   const now = Date.now();
@@ -218,17 +233,35 @@ export async function GET() {
     startedAt: string;
     ageMs: number;
     success?: boolean;
+    /** Most recent stage reported by the tracker (per-stage SSE feed). */
+    stage?: string;
   };
+
+  // Index bridge in-flight items by ticketIdentifier so we can paste the
+  // current stage onto each Paperclip in_progress row.
+  const inFlightByTicket = new Map<string, BridgeInFlightItem>();
+  for (const it of bridgeInFlight?.items ?? []) {
+    if (it.ticketIdentifier) inFlightByTicket.set(it.ticketIdentifier, it);
+  }
 
   const liveRuns: LiveRun[] = pcInFlight.map((iss) => {
     const personaEntry = iss.assigneeAgentId ? roster.get(iss.assigneeAgentId) : undefined;
     const recentForTicket = findRecentForTicket(iss.identifier ?? null);
-    // If we haven't seen a learning record yet (run just started, hasn't
-    // emitted recordOutcome), fall back to the persona's PREFERRED CLI/model
-    // from the registry. The dashboard can then light up the canonical edge
-    // immediately instead of waiting ~30s for the first run to complete.
-    const cli = recentForTicket?.cli ?? personaEntry?.preferredCli ?? "?";
-    const model = recentForTicket?.model ?? personaEntry?.preferredModel ?? "?";
+    const trackerEntry = iss.identifier ? inFlightByTicket.get(iss.identifier) : undefined;
+    // CLI/model priority: tracker (real-time, from the bridge tracker)
+    //                    → learning (post-run record)
+    //                    → registry preferred (anticipatory)
+    //                    → "?"
+    const cli =
+      trackerEntry?.cli ??
+      recentForTicket?.cli ??
+      personaEntry?.preferredCli ??
+      "?";
+    const model =
+      trackerEntry?.model ??
+      recentForTicket?.model ??
+      personaEntry?.preferredModel ??
+      "?";
     const provider = recentForTicket?.provider ?? inferProvider(cli, model);
 
     // triggeredBy heuristic: an in-flight ticket is "telegram" only if
@@ -254,6 +287,7 @@ export async function GET() {
       startedAt: iss.startedAt ?? iss.updatedAt ?? iss.createdAt ?? new Date(now).toISOString(),
       ageMs: now - Date.parse(iss.startedAt ?? iss.updatedAt ?? iss.createdAt ?? new Date(now).toISOString()),
       success: undefined,
+      stage: trackerEntry?.stage,
     };
   });
 
@@ -307,14 +341,38 @@ export async function GET() {
     if (r.provider) activeProviders.add(r.provider);
   }
 
-  // Per-service activation: each one keys off a real signal
+  // Per-service activation:
+  // A service stays lit once any in-flight run has REACHED its stage (not
+  // exact-match — once cli-running starts, quota/memory already happened
+  // and should stay glowing). When no tracker info is present (legacy run),
+  // we light quota/memory while the run is in flight so the panel still
+  // shows activity.
+  const STAGE_ORDER = [
+    "dispatched",
+    "memory-retrieve",
+    "quota-select",
+    "cli-running",
+    "posting-result",
+    "done",
+  ];
+  const stageRank = (s: string | null | undefined) =>
+    s ? STAGE_ORDER.indexOf(s) : -1;
+  const anyReached = (target: string) =>
+    liveRuns.some((r) => stageRank(r.stage) >= stageRank(target));
+  const anyUntracked = liveRuns.some((r) => !r.stage);
+
+  const policyAuditItems = policyAudit?.items ?? [];
+  const policyActiveRecent = policyAuditItems.some(
+    (e) => e.ts && now - Date.parse(e.ts) <= completionWindowMs,
+  );
   const activeServices = {
-    quota: liveRuns.length > 0, // bridge calls /select on every run
-    memory: liveRuns.length > 0, // bridge calls qdrant retrieveAllScopes on every run
+    memory: anyReached("memory-retrieve") || anyUntracked,
+    quota: anyReached("quota-select") || anyUntracked,
     learning:
-      items.some((r) => r.ts && now - Date.parse(r.ts) <= completionWindowMs) || liveRuns.length > 0,
+      anyReached("posting-result") ||
+      items.some((r) => r.ts && now - Date.parse(r.ts) <= completionWindowMs),
     gateway: (audit?.items?.length ?? 0) > 0,
-    policy: false, // no /audit/recent on policy-engine yet
+    policy: policyActiveRecent,
   };
 
   // Operator distinction: light up only if at least one live run is telegram-originated
@@ -388,6 +446,7 @@ export async function GET() {
       triggeredBy: r.triggeredBy,
       startedAt: r.startedAt,
       ageMs: r.ageMs,
+      stage: r.stage ?? null,
     })),
     // Back-compat: single primary live run for legacy code paths
     liveRun: primaryLive
