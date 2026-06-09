@@ -26,6 +26,28 @@ import {
 } from "@/components/flow/nodes";
 import { AnimatedEdge } from "@/components/flow/edges";
 
+interface LiveRunEntry {
+  persona: string;
+  personaName: string;
+  cli: string;
+  model: string;
+  provider: string;
+  ticketId: string | null;
+  ticketIdentifier: string | null;
+  parentIssueId: string | null;
+  triggeredBy: "telegram" | "paperclip" | "manual";
+  startedAt: string;
+  ageMs: number;
+}
+
+interface TreeEntry {
+  id: string;
+  identifier: string | null;
+  title: string;
+  status: string;
+  childrenLive: Array<{ persona: string; identifier: string | null; cli: string }>;
+}
+
 interface FlowState {
   ts: string;
   bridge: { healthy: boolean; paperclip: string; quota: string; learning: string; agentCount: number };
@@ -46,6 +68,8 @@ interface FlowState {
     ticketId?: string | null;
     ts: string;
   } | null;
+  liveRuns: LiveRunEntry[];
+  tree: TreeEntry[];
   recent: Array<{
     persona: string;
     cli: string;
@@ -59,8 +83,11 @@ interface FlowState {
   activeWorkers: string[];
   activeClis: string[];
   activeProviders: string[];
+  activeServices: { quota: boolean; memory: boolean; learning: boolean; gateway: boolean; policy: boolean };
+  operatorActive: boolean;
+  paperclipActive: boolean;
   recentToolCalls: Array<{ ts: string; tool: string; actor: string; action: string; decision: string }>;
-  totals: { totalRunsToday: number; successRate: number; totalCostToday: number };
+  totals: { totalRunsToday: number; successRate: number; totalCostToday: number; activeAgentCount?: number };
 }
 
 const nodeTypes: NodeTypes = {
@@ -234,6 +261,58 @@ export function FlowViewer() {
                 </div>
               </>
             )}
+            {state.liveRuns && state.liveRuns.length > 1 && (
+              <>
+                <div className="my-1.5 h-px bg-hud-dim" />
+                <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">
+                  ▶ {state.liveRuns.length} CONCURRENT
+                </div>
+                <div className="mt-1 max-h-24 overflow-hidden font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+                  {state.liveRuns.slice(0, 6).map((r, i) => (
+                    <div key={i} className="truncate">
+                      {r.ticketIdentifier ?? "?"} · {r.persona} · {r.cli !== "?" ? r.cli : "wait"}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Subtask-tree panel — only renders when the orchestrator has spawned
+            child issues whose parents are visible. Shows parent ticket + which
+            children are currently being worked on. */}
+        {state?.tree && state.tree.length > 0 && (
+          <div
+            className="pointer-events-none absolute right-12 top-72 z-20 min-w-[220px] max-w-[280px] border border-hud-dim bg-black/85 px-3 py-2.5 backdrop-blur-md"
+            style={{
+              clipPath: "polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))",
+              boxShadow: "0 0 20px rgba(0,217,255,0.15)",
+            }}
+          >
+            <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">
+              ◢ SUBTASK TREE
+            </div>
+            <div className="my-1.5 h-px bg-hud-dim" />
+            {state.tree.map((p) => (
+              <div key={p.id} className="mt-1">
+                <div className="font-mono text-[10px] uppercase text-hud glow-text">
+                  {p.identifier ?? p.id.slice(0, 6)} · {p.status}
+                </div>
+                <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud-dim truncate">
+                  {p.title.slice(0, 32)}
+                </div>
+                {p.childrenLive.length > 0 && (
+                  <div className="ml-2 mt-1 font-mono text-[8.5px] uppercase tracking-widest text-hud">
+                    {p.childrenLive.slice(0, 5).map((c, i) => (
+                      <div key={i} className="truncate">
+                        └ {c.identifier ?? "?"} · {c.persona}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </ReactFlow>
@@ -243,11 +322,22 @@ export function FlowViewer() {
 
 function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
   const active = (set: string[] | undefined, id: string) => set?.includes(id) ?? false;
-  const liveRun = s?.liveRun;
-  const hermesLive = false; // can't detect directly today
-  const operatorActive = Boolean(liveRun);
-  const paperclipLive = Boolean(liveRun?.ticketId);
-  const bridgeLive = Boolean(liveRun);
+  const liveRuns = s?.liveRuns ?? [];
+  // Backwards-compat alias: most-recent in-flight run, used for the bottom card.
+  const liveRun = s?.liveRun ?? null;
+  // Operator only lights up when at least one in-flight ticket was triggered from
+  // Telegram (createdByAgentId=Hermes within the last 5min). For Paperclip
+  // re-dispatches it stays dim — they didn't come from a human.
+  const operatorActive = Boolean(s?.operatorActive);
+  // Paperclip lights up whenever ANY ticket is being worked on, regardless of
+  // who triggered it.
+  const paperclipLive = Boolean(s?.paperclipActive);
+  // Bridge lights up while there's anything in flight at all.
+  const bridgeLive = liveRuns.length > 0;
+  // Hermes lights up only on Telegram-originated runs (it's the brain talking
+  // to the user via Telegram or doing routing decisions). For Paperclip-dispatch
+  // flows Hermes is dormant.
+  const hermesLive = operatorActive;
 
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -304,10 +394,14 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     data: { active: bridgeLive, tone: "live", label: "heartbeat /run" },
   });
 
-  // Workers
+  // Workers — light up EVERY worker that has a live run right now (not just
+  // one). Multiple agents working in parallel is the normal case once the
+  // orchestrator dispatches a subtask tree.
+  const liveWorkerIds = new Set(liveRuns.map((r) => r.persona));
   for (const w of WORKERS) {
-    const isActive = active(s?.activeWorkers, w.id);
-    const isLiveRunWorker = liveRun?.persona === w.id;
+    const isHistoricActive = active(s?.activeWorkers, w.id);
+    const isLiveNow = liveWorkerIds.has(w.id);
+    const myLiveRun = liveRuns.find((r) => r.persona === w.id);
     nodes.push({
       id: `w-${w.id}`,
       type: "worker",
@@ -316,8 +410,9 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
         name: w.name,
         role: w.role,
         department: w.department,
-        active: isActive || isLiveRunWorker,
-        success: isLiveRunWorker ? liveRun?.success : undefined,
+        active: isHistoricActive || isLiveNow,
+        success: undefined,
+        ticket: myLiveRun?.ticketIdentifier ?? undefined,
       },
     });
     edges.push({
@@ -325,7 +420,11 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
       source: "bridge",
       target: `w-${w.id}`,
       type: "animated",
-      data: { active: isActive || isLiveRunWorker, tone: isLiveRunWorker ? "live" : "idle" },
+      data: {
+        active: isHistoricActive || isLiveNow,
+        tone: isLiveNow ? "live" : isHistoricActive ? "accent" : "idle",
+        label: isLiveNow ? myLiveRun?.ticketIdentifier ?? undefined : undefined,
+      },
     });
   }
 
@@ -346,18 +445,19 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     });
   }
 
-  // Worker → CLI edges (which CLI each worker tends to use)
-  // For simplicity, we draw an edge from every active worker to the CLI used in the liveRun
-  if (liveRun) {
-    const wid = `w-${liveRun.persona}`;
-    const cid = `cli-${liveRun.cli === "hermes" ? "hermes-cli" : liveRun.cli}`;
+  // Worker → CLI edges — one per live run. Multiple agents on claude render
+  // as multiple animated edges instead of one shared line.
+  for (const r of liveRuns) {
+    if (r.cli === "?" || !r.cli) continue;
+    const wid = `w-${r.persona}`;
+    const cid = `cli-${r.cli === "hermes" ? "hermes-cli" : r.cli}`;
     if (nodes.find((n) => n.id === wid) && nodes.find((n) => n.id === cid)) {
       edges.push({
-        id: `e-${wid}-${cid}`,
+        id: `e-live-${wid}-${cid}-${r.ticketIdentifier ?? r.ticketId ?? "?"}`,
         source: wid,
         target: cid,
         type: "animated",
-        data: { active: true, tone: "live", label: liveRun.model.split("/").pop() },
+        data: { active: true, tone: "live", label: r.model && r.model !== "?" ? r.model.split("/").pop() : undefined },
       });
     }
   }
@@ -427,28 +527,76 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
     }
   }
 
-  // Side services — clustered BELOW the bridge in a tight row, well to the LEFT of the worker column (which starts at X.workers = 1440) to prevent collision with MK Strategist etc.
-  const sy = CENTER_Y + 380; // services row Y — below the bridge zone
-  const services = [
-    { id: "quota", name: "Quota", port: 7001, icon: "gauge" as const, x: 280, y: sy, detail: s?.quota?.survival ? "survival ⚠" : "ok" },
-    { id: "policy", name: "Policy", port: 7002, icon: "shield" as const, x: 510, y: sy, detail: "5 rules" },
-    { id: "memory", name: "Memory", port: 6333, icon: "database" as const, x: 740, y: sy + 30, detail: "qdrant · 4 scopes" },
-    { id: "learning", name: "Learning", port: 7003, icon: "sparkles" as const, x: 970, y: sy, detail: "outcomes →" },
-    { id: "gateway", name: "Tool Gateway", port: 7004, icon: "wrench" as const, x: 1200, y: sy, detail: s?.recentToolCalls?.length ? `${s.recentToolCalls.length} calls` : "idle" },
+  // Side services — each one lights up ONLY when its real signal fires.
+  // (Before: every service glowed in lockstep with any in-flight run, which
+  // overstated actual activity. Now we use activeServices flags from the API.)
+  const services = s?.activeServices;
+  const sy = CENTER_Y + 380;
+  const svDefs = [
+    {
+      id: "quota",
+      name: "Quota",
+      port: 7001,
+      icon: "gauge" as const,
+      x: 280,
+      y: sy,
+      detail: s?.quota?.survival ? "survival ⚠" : "ok",
+      live: Boolean(services?.quota),
+    },
+    {
+      id: "policy",
+      name: "Policy",
+      port: 7002,
+      icon: "shield" as const,
+      x: 510,
+      y: sy,
+      detail: "5 rules",
+      live: Boolean(services?.policy),
+    },
+    {
+      id: "memory",
+      name: "Memory",
+      port: 6333,
+      icon: "database" as const,
+      x: 740,
+      y: sy + 30,
+      detail: "qdrant · 4 scopes",
+      live: Boolean(services?.memory),
+    },
+    {
+      id: "learning",
+      name: "Learning",
+      port: 7003,
+      icon: "sparkles" as const,
+      x: 970,
+      y: sy,
+      detail: "outcomes →",
+      live: Boolean(services?.learning),
+    },
+    {
+      id: "gateway",
+      name: "Tool Gateway",
+      port: 7004,
+      icon: "wrench" as const,
+      x: 1200,
+      y: sy,
+      detail: s?.recentToolCalls?.length ? `${s.recentToolCalls.length} calls` : "idle",
+      live: Boolean(services?.gateway),
+    },
   ];
-  for (const sv of services) {
+  for (const sv of svDefs) {
     nodes.push({
       id: `s-${sv.id}`,
       type: "service",
       position: { x: sv.x, y: sv.y },
-      data: { name: sv.name, port: sv.port, icon: sv.icon, healthy: true, live: bridgeLive, detail: sv.detail },
+      data: { name: sv.name, port: sv.port, icon: sv.icon, healthy: true, live: sv.live, detail: sv.detail },
     });
     edges.push({
       id: `e-bridge-s-${sv.id}`,
       source: "bridge",
       target: `s-${sv.id}`,
       type: "animated",
-      data: { active: bridgeLive, tone: bridgeLive ? "live" : "idle" },
+      data: { active: sv.live, tone: sv.live ? "live" : "idle" },
     });
   }
 

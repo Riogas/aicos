@@ -114,6 +114,23 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     return { ok: true, ...s };
   });
 
+  // Read-only registry dump used by the dashboard to translate
+  // Paperclip's assigneeAgentId (UUID) into our human-friendly registryId
+  // (e.g. "it-architect") and to glow the right worker boxes.
+  app.get("/admin/registry", async () => {
+    const { listRegistryAgents } = await import("./registry.js");
+    return {
+      agents: listRegistryAgents().map((a) => ({
+        id: a.id,
+        name: a.name,
+        department: a.department,
+        paperclipAgentId: a.paperclipAgentId,
+        preferredModel: a.preferredModel,
+        fallbackChain: a.fallbackChain ?? [],
+      })),
+    };
+  });
+
   // ─── Orchestrator endpoint ───────────────────────────────────────────────
   // POST /orchestrate { taskDescription, projectId, parentIssueId? }
   // Returns { decomposition, createdIssues, warnings } and creates the subtask
@@ -127,6 +144,9 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     projectId: z.string().min(1),
     parentIssueId: z.string().optional(),
     defaultRole: z.string().optional(),
+    triggeredBy: z.enum(["telegram", "paperclip", "manual"]).optional(),
+    parentTitle: z.string().optional(),
+    parentAssigneeAgentId: z.string().optional(),
   });
 
   app.post("/orchestrate", async (req, reply) => {
@@ -146,6 +166,9 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
       projectId: parsed.data.projectId,
       parentIssueId: parsed.data.parentIssueId,
       defaultRole: parsed.data.defaultRole,
+      triggeredBy: parsed.data.triggeredBy,
+      parentTitle: parsed.data.parentTitle,
+      parentAssigneeAgentId: parsed.data.parentAssigneeAgentId,
     };
     const client = new PaperclipClient({
       apiUrl: opts.paperclipApiUrl!,

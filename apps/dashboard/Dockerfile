@@ -15,6 +15,9 @@ COPY --from=deps /app/apps/dashboard/node_modules ./apps/dashboard/node_modules
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/dashboard ./apps/dashboard
 
+# corepack is needed in the builder stage too because the deps stage's pnpm
+# binary doesn't persist across stages
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 RUN cd apps/dashboard && pnpm build
 
 FROM node:22-alpine AS runtime
@@ -30,7 +33,6 @@ ENV HOSTNAME=0.0.0.0
 # Next.js standalone output
 COPY --from=builder --chown=nextjs:nextjs /app/apps/dashboard/.next/standalone ./
 COPY --from=builder --chown=nextjs:nextjs /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
-COPY --from=builder --chown=nextjs:nextjs /app/apps/dashboard/public ./apps/dashboard/public 2>/dev/null || true
 
 USER nextjs
 EXPOSE 3000

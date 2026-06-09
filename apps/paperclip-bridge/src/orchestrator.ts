@@ -54,10 +54,28 @@ export interface OrchestrateInput {
   taskDescription: string;
   companyId: string;
   projectId: string;
-  /** optional parent issue (e.g. a Telegram-originated tracking ticket) */
+  /**
+   * Optional parent issue. Two scenarios:
+   *  - If provided (e.g. a Telegram-originated tracking ticket), subtasks
+   *    become its children directly.
+   *  - If omitted, the orchestrator creates a "root" parent issue itself,
+   *    assigned to the CEO/Hermes agent, so the dashboard can render the
+   *    full subtask tree under a single roof.
+   */
   parentIssueId?: string;
   /** fallback agent registry id when decomposition fails */
   defaultRole?: string;
+  /**
+   * Where the task came from. Tags the auto-created parent issue so the
+   * dashboard can light up the Operator only on telegram-originated runs.
+   * Defaults to "manual" (which is functionally equivalent to "paperclip"
+   * for the operator-light heuristic).
+   */
+  triggeredBy?: "telegram" | "paperclip" | "manual";
+  /** Optional title for the auto-created parent (defaults to first line of taskDescription). */
+  parentTitle?: string;
+  /** Agent id to assign the auto-created parent to. Defaults to AICOS_HERMES_AGENT_ID env. */
+  parentAssigneeAgentId?: string;
 }
 
 export interface OrchestrateResult {
@@ -395,8 +413,56 @@ export async function createSubtaskTree(
   return { created, warnings };
 }
 
-export async function orchestrate(input: OrchestrateInput, pcClient: PaperclipClient): Promise<OrchestrateResult> {
+export async function orchestrate(input: OrchestrateInput, pcClient: PaperclipClient): Promise<OrchestrateResult & { parentIssueId?: string; parentIdentifier?: string | null }> {
   const { decomp, warnings: dwarns } = await decompose(input.taskDescription, input.defaultRole ?? FALLBACK_ROLE);
-  const { created, warnings: cwarns } = await createSubtaskTree(input, decomp, pcClient);
-  return { decomposition: decomp, createdIssues: created, warnings: [...dwarns, ...cwarns] };
+
+  // Auto-create a root parent if caller didn't provide one, so the dashboard
+  // can group all subtasks under a single tree node.
+  let effectiveParentId = input.parentIssueId;
+  let parentIdentifier: string | null | undefined;
+  const autoCreateWarnings: string[] = [];
+  if (!effectiveParentId) {
+    const parentAssignee =
+      input.parentAssigneeAgentId ?? process.env.AICOS_HERMES_AGENT_ID;
+    if (parentAssignee) {
+      const triggeredBy = input.triggeredBy ?? "manual";
+      const titlePrefix = triggeredBy === "telegram" ? "[telegram] " : "";
+      const baseTitle = (
+        input.parentTitle ?? input.taskDescription.split("\n")[0] ?? "Untitled task"
+      ).slice(0, 200);
+      const finalTitle = `${titlePrefix}${baseTitle}`;
+      try {
+        const parent = await pcClient.createIssue({
+          companyId: input.companyId,
+          projectId: input.projectId,
+          title: finalTitle,
+          description: input.taskDescription,
+          assigneeAgentId: parentAssignee,
+          priority: "medium",
+          // Parents start in 'in_progress' so they're visible in the live tree
+          // (backlog would hide them from the in_progress list the dashboard polls).
+          status: "in_progress",
+        });
+        effectiveParentId = parent.id;
+        parentIdentifier = (parent.identifier as string | undefined) ?? null;
+      } catch (e) {
+        autoCreateWarnings.push(`auto-create parent failed: ${(e as Error).message}`);
+      }
+    } else {
+      autoCreateWarnings.push("AICOS_HERMES_AGENT_ID not set — parent issue NOT auto-created (subtasks will not appear under a tree node)");
+    }
+  }
+
+  const { created, warnings: cwarns } = await createSubtaskTree(
+    { ...input, parentIssueId: effectiveParentId },
+    decomp,
+    pcClient,
+  );
+  return {
+    decomposition: decomp,
+    createdIssues: created,
+    warnings: [...dwarns, ...autoCreateWarnings, ...cwarns],
+    parentIssueId: effectiveParentId,
+    parentIdentifier,
+  };
 }

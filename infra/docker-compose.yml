@@ -224,7 +224,16 @@ services:
       QUOTA_SERVICE_URL: http://aicos-quota-manager:7001
       POLICY_SERVICE_URL: http://aicos-policy-engine:7002
       LEARNING_SERVICE_URL: http://aicos-learning:7003
+      GATEWAY_SERVICE_URL: http://aicos-tool-gateway:7004
       BRIDGE_SERVICE_URL: http://host.docker.internal:7100
+      # /api/flow-state asks Paperclip directly for in_progress issues so the
+      # multi-agent tree + concurrent worker view reflects what's really happening
+      # (the bridge's HTTP-only in-flight tracker misses runs spawned via the
+      # process adapter).
+      PAPERCLIP_API_URL: http://aicos-paperclip:3100
+      PAPERCLIP_API_KEY: ${PAPERCLIP_API_KEY}
+      AICOS_COMPANY_ID: ${AICOS_COMPANY_ID}
+      AICOS_HERMES_AGENT_ID: ${AICOS_HERMES_AGENT_ID}
     extra_hosts:
       - "host.docker.internal:172.18.0.1"
     ports:

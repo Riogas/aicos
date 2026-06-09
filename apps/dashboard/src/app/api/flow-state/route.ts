@@ -2,6 +2,22 @@
  * Aggregated live-state endpoint for the /flow viewer.
  * Polls quota + learning + tool-gateway audit + bridge health in parallel,
  * normalizes into a flat shape consumed by the React Flow client.
+ *
+ * v2 changes:
+ *   - Multiple concurrent in-flight runs (not just [0]).
+ *   - Pulls ALL in_progress issues directly from Paperclip so we see runs
+ *     dispatched via process adapter (the HTTP-only in-flight tracker misses
+ *     those).
+ *   - Tree view: when issues share a parent_id, we group them and emit
+ *     parent/children edges for the dashboard to render the subtask tree.
+ *   - triggeredBy heuristic: if the assignee is Hermes (CEO) AND the ticket
+ *     was created in the last 5 min → "telegram"; otherwise "paperclip".
+ *   - Per-service active signals tied to real recent activity:
+ *       quota   = any liveRun in last 30s (we DO call /select per attempt)
+ *       memory  = any liveRun in last 30s (we DO call qdrant retrieveAllScopes per run)
+ *       learning = recent /recent items in last 60s (each run posts /usage at end)
+ *       gateway = recentToolCalls.length > 0
+ *       policy  = false (no /audit/recent endpoint yet)
  */
 
 import { NextResponse } from "next/server";
@@ -10,11 +26,11 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const T = 2000;
-const fetchSafe = async <T,>(url: string): Promise<T | null> => {
+const fetchSafe = async <T,>(url: string, headers?: Record<string, string>): Promise<T | null> => {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), T);
-    const r = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
+    const r = await fetch(url, { signal: ctrl.signal, cache: "no-store", headers });
     clearTimeout(t);
     if (!r.ok) return null;
     return (await r.json()) as T;
@@ -61,15 +77,23 @@ interface BridgeHealth {
   registry?: { resolvableAgents?: number };
 }
 
-interface InFlightItem {
-  runId: string;
-  persona?: string;
-  personaName?: string;
-  cli?: string;
-  model?: string;
-  ticketIdentifier?: string;
-  startedAt: string;
+interface PaperclipIssue {
+  id: string;
+  identifier?: string | null;
+  title: string;
+  status: string;
+  assigneeAgentId?: string | null;
+  parentId?: string | null;
+  createdByAgentId?: string | null;
+  startedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  blockedBy?: Array<{ id: string; identifier?: string | null; status?: string }>;
 }
+
+// (HERMES_AGENT_ID and TELEGRAM_FRESHNESS_MS heuristic removed — we now derive
+// triggeredBy from the parent issue's "[telegram]" title prefix, which the
+// orchestrator sets when called with triggeredBy="telegram".)
 
 // Simple cli→provider mapping (mirror of bridge provider-map.ts)
 function inferProvider(cli: string | undefined, model: string | undefined): string {
@@ -101,66 +125,186 @@ function inferProvider(cli: string | undefined, model: string | undefined): stri
   }
 }
 
+interface AgentRosterEntry {
+  id: string;
+  paperclipAgentId?: string;
+  name: string;
+}
+
+// Resolved once per request from the bridge registry. Used to map
+// assigneeAgentId (Paperclip UUID) → registryId (it-analyst etc.).
+async function getAgentRoster(bridgeUrl: string): Promise<Map<string, AgentRosterEntry>> {
+  type Resp = { agents?: Array<{ id?: string; paperclipAgentId?: string; name?: string }> };
+  const r = await fetchSafe<Resp>(`${bridgeUrl}/admin/registry`);
+  const map = new Map<string, AgentRosterEntry>();
+  for (const a of r?.agents ?? []) {
+    if (!a.paperclipAgentId || !a.id) continue;
+    map.set(a.paperclipAgentId, { id: a.id, paperclipAgentId: a.paperclipAgentId, name: a.name ?? a.id });
+  }
+  return map;
+}
+
 export async function GET() {
   const QUOTA = process.env.QUOTA_SERVICE_URL || "http://localhost:7001";
   const LEARNING = process.env.LEARNING_SERVICE_URL || "http://localhost:7003";
   const BRIDGE = process.env.BRIDGE_SERVICE_URL || "http://localhost:7100";
   const GATEWAY = process.env.GATEWAY_SERVICE_URL || "http://localhost:7004";
+  const PAPERCLIP = process.env.PAPERCLIP_API_URL || "http://localhost:3100";
+  const PAPERCLIP_KEY = process.env.PAPERCLIP_API_KEY;
+  const COMPANY_ID = process.env.AICOS_COMPANY_ID;
 
-  const [quota, recent, bridge, audit, inFlight] = await Promise.all([
+  // Paperclip auth header — passed only when configured
+  const pcHeaders = PAPERCLIP_KEY ? { Authorization: `Bearer ${PAPERCLIP_KEY}` } : undefined;
+
+  const paperclipIssuesUrl =
+    PAPERCLIP_KEY && COMPANY_ID
+      ? `${PAPERCLIP}/api/companies/${COMPANY_ID}/issues?status=in_progress&includeBlockedBy=true`
+      : null;
+
+  const [quota, recent, bridge, audit, paperclipInProgress, roster] = await Promise.all([
     fetchSafe<QuotaSnapshot>(`${QUOTA}/status`),
     fetchSafe<{ items: RecentRun[] }>(`${LEARNING}/recent`),
     fetchSafe<BridgeHealth>(`${BRIDGE}/health`),
     fetchSafe<{ items: AuditEntry[] }>(`${GATEWAY}/audit/recent`),
-    fetchSafe<{ count: number; items: InFlightItem[] }>(`${BRIDGE}/in-flight`),
+    paperclipIssuesUrl ? fetchSafe<{ items: PaperclipIssue[] } | PaperclipIssue[]>(paperclipIssuesUrl, pcHeaders) : Promise.resolve(null),
+    getAgentRoster(BRIDGE),
   ]);
 
   const now = Date.now();
-  const items = (recent?.items ?? []).slice(0, 12);
+  const items = (recent?.items ?? []).slice(0, 20);
 
-  // Detect "currently in flight" — prefer the bridge's in-flight tracker,
-  // fall back to the most recent completed run within last 90s for narration purposes.
-  const inFlightItem = inFlight?.items?.[0];
-  const inFlightLive = inFlightItem
-    ? {
-        provider: inFlightItem.model ? inferProvider(inFlightItem.cli, inFlightItem.model) : "unknown",
-        cli: inFlightItem.cli ?? "?",
-        model: inFlightItem.model ?? "?",
-        taskType: "other",
-        success: true, // placeholder — only known after completion
-        durationMs: now - new Date(inFlightItem.startedAt).getTime(),
-        costUsd: 0,
-        agentRegistryId: inFlightItem.persona,
-        ticketId: inFlightItem.ticketIdentifier ?? null,
-        ts: inFlightItem.startedAt,
-        inFlight: true,
-      }
-    : null;
-  const liveRun =
-    inFlightLive ??
-    items.find((r) => {
-      if (!r.ts) return false;
-      const age = now - new Date(r.ts).getTime();
-      return age >= 0 && age < 90_000;
-    });
+  // Normalize Paperclip in-progress list (it may come as a bare array or { items })
+  const pcInFlight = Array.isArray(paperclipInProgress)
+    ? paperclipInProgress
+    : paperclipInProgress?.items ?? [];
 
-  // Which workers / clis / providers have been ACTIVE recently (last 60s)
-  const activeWindow = 60_000;
+  // Cross-reference each Paperclip in_progress issue with the most recent
+  // learning record for the same ticket to find which CLI / model is running.
+  // This way the dashboard can light up the correct CLI box per worker.
+  function findRecentForTicket(ticketIdentifier: string | null | undefined): RecentRun | undefined {
+    if (!ticketIdentifier) return undefined;
+    // Learning stores ticketId as the identifier (RIO-XX) when available.
+    return items.find((r) => r.ticketId === ticketIdentifier);
+  }
+
+  type LiveRun = {
+    persona: string;
+    personaName: string;
+    cli: string;
+    model: string;
+    provider: string;
+    ticketId: string | null;
+    ticketIdentifier: string | null;
+    parentIssueId: string | null;
+    triggeredBy: "telegram" | "paperclip" | "manual";
+    startedAt: string;
+    ageMs: number;
+    success?: boolean;
+  };
+
+  const liveRuns: LiveRun[] = pcInFlight.map((iss) => {
+    const personaEntry = iss.assigneeAgentId ? roster.get(iss.assigneeAgentId) : undefined;
+    const recentForTicket = findRecentForTicket(iss.identifier ?? null);
+    const cli = recentForTicket?.cli ?? "?";
+    const model = recentForTicket?.model ?? "?";
+    const provider = recentForTicket?.provider ?? inferProvider(cli, model);
+
+    // triggeredBy heuristic: an in-flight ticket is "telegram" only if
+    // either the ticket itself OR its parent has the [telegram] prefix in
+    // its title (set by the orchestrator when triggeredBy=telegram). This
+    // avoids false-positives when the orchestrator creates tickets using
+    // the Hermes API key (createdByAgentId=Hermes is NOT a reliable signal).
+    let triggeredBy: LiveRun["triggeredBy"] = "paperclip";
+    if (iss.title?.startsWith("[telegram]")) {
+      triggeredBy = "telegram";
+    }
+
+    return {
+      persona: personaEntry?.id ?? "unknown",
+      personaName: personaEntry?.name ?? iss.assigneeAgentId ?? "unknown",
+      cli,
+      model,
+      provider,
+      ticketId: iss.id,
+      ticketIdentifier: iss.identifier ?? null,
+      parentIssueId: iss.parentId ?? null,
+      triggeredBy,
+      startedAt: iss.startedAt ?? iss.updatedAt ?? iss.createdAt ?? new Date(now).toISOString(),
+      ageMs: now - Date.parse(iss.startedAt ?? iss.updatedAt ?? iss.createdAt ?? new Date(now).toISOString()),
+      success: undefined,
+    };
+  });
+
+  // Build subtask tree from the in_progress set: group by parentIssueId.
+  // For each parent, include its children's identifier + assignee + status.
+  // Also pull parent info if any liveRun has a parentIssueId set.
+  const parentIds = new Set<string>();
+  for (const r of liveRuns) {
+    if (r.parentIssueId) parentIds.add(r.parentIssueId);
+  }
+  let parents: PaperclipIssue[] = [];
+  if (parentIds.size > 0 && pcHeaders && COMPANY_ID) {
+    // Paperclip doesn't have a "by ids" bulk endpoint — get each parent
+    parents = (
+      await Promise.all(
+        Array.from(parentIds).map((pid) =>
+          fetchSafe<PaperclipIssue>(`${PAPERCLIP}/api/issues/${pid}`, pcHeaders),
+        ),
+      )
+    ).filter((p): p is PaperclipIssue => p !== null);
+  }
+
+  // Propagate [telegram] tag from parent down to children: if the parent
+  // title starts with "[telegram]" then every subtask under it is also
+  // considered telegram-originated for operator-light purposes.
+  const parentById = new Map(parents.map((p) => [p.id, p]));
+  for (const r of liveRuns) {
+    if (r.triggeredBy === "telegram") continue;
+    const parent = r.parentIssueId ? parentById.get(r.parentIssueId) : undefined;
+    if (parent?.title?.startsWith("[telegram]")) {
+      r.triggeredBy = "telegram";
+    }
+  }
+
+  // Aggregate active sets used by the UI to glow nodes/edges
   const activeWorkers = new Set<string>();
   const activeClis = new Set<string>();
   const activeProviders = new Set<string>();
-  if (inFlightItem?.persona) activeWorkers.add(inFlightItem.persona);
-  if (inFlightItem?.cli) activeClis.add(inFlightItem.cli);
-  if (inFlightLive?.provider) activeProviders.add(inFlightLive.provider);
+  for (const r of liveRuns) {
+    if (r.persona !== "unknown") activeWorkers.add(r.persona);
+    if (r.cli && r.cli !== "?") activeClis.add(r.cli);
+    if (r.provider && r.provider !== "unknown") activeProviders.add(r.provider);
+  }
+  // Plus anything that finished in the last 30s (so the trail is visible)
+  const completionWindowMs = 30_000;
   for (const r of items) {
     if (!r.ts) continue;
-    if (now - new Date(r.ts).getTime() > activeWindow) continue;
+    if (now - Date.parse(r.ts) > completionWindowMs) continue;
     if (r.agentRegistryId) activeWorkers.add(r.agentRegistryId);
     if (r.cli) activeClis.add(r.cli);
     if (r.provider) activeProviders.add(r.provider);
   }
 
+  // Per-service activation: each one keys off a real signal
+  const activeServices = {
+    quota: liveRuns.length > 0, // bridge calls /select on every run
+    memory: liveRuns.length > 0, // bridge calls qdrant retrieveAllScopes on every run
+    learning:
+      items.some((r) => r.ts && now - Date.parse(r.ts) <= completionWindowMs) || liveRuns.length > 0,
+    gateway: (audit?.items?.length ?? 0) > 0,
+    policy: false, // no /audit/recent on policy-engine yet
+  };
+
+  // Operator distinction: light up only if at least one live run is telegram-originated
+  const operatorActive = liveRuns.some((r) => r.triggeredBy === "telegram");
+  // paperclip is "live" any time tickets are running, regardless of origin
+  const paperclipActive = liveRuns.length > 0;
+
   const recentAuditCalls = (audit?.items ?? []).slice(0, 6);
+
+  // Back-compat: surface a single liveRun (most-recent-started) so legacy
+  // dashboard consumers don't break
+  const primaryLive = liveRuns.length > 0 ? liveRuns[0]! : null;
 
   return NextResponse.json({
     ts: new Date(now).toISOString(),
@@ -198,20 +342,49 @@ export async function GET() {
           ),
         }
       : null,
-    liveRun: liveRun
+    // New: multiple concurrent runs
+    liveRuns: liveRuns.map((r) => ({
+      persona: r.persona,
+      personaName: r.personaName,
+      cli: r.cli,
+      model: r.model,
+      provider: r.provider,
+      ticketId: r.ticketId,
+      ticketIdentifier: r.ticketIdentifier,
+      parentIssueId: r.parentIssueId,
+      triggeredBy: r.triggeredBy,
+      startedAt: r.startedAt,
+      ageMs: r.ageMs,
+    })),
+    // Back-compat: single primary live run for legacy code paths
+    liveRun: primaryLive
       ? {
-          persona: liveRun.agentRegistryId ?? "unknown",
-          cli: liveRun.cli,
-          model: liveRun.model,
-          provider: liveRun.provider,
-          taskType: liveRun.taskType,
-          success: liveRun.success,
-          durationMs: liveRun.durationMs,
-          costUsd: liveRun.costUsd,
-          ticketId: liveRun.ticketId ?? null,
-          ts: liveRun.ts,
+          persona: primaryLive.persona,
+          cli: primaryLive.cli,
+          model: primaryLive.model,
+          provider: primaryLive.provider,
+          taskType: "other",
+          success: true,
+          durationMs: primaryLive.ageMs,
+          costUsd: 0,
+          ticketId: primaryLive.ticketIdentifier,
+          ts: primaryLive.startedAt,
         }
       : null,
+    // Subtask tree: each parent + its children identifiers/status from
+    // Paperclip's blockedBy graph
+    tree: parents.map((p) => ({
+      id: p.id,
+      identifier: p.identifier ?? null,
+      title: p.title,
+      status: p.status,
+      // children = liveRuns that point to this parent
+      childrenLive: liveRuns.filter((r) => r.parentIssueId === p.id).map((r) => ({
+        persona: r.persona,
+        identifier: r.ticketIdentifier,
+        cli: r.cli,
+      })),
+    })),
     recent: items.map((r) => ({
       persona: r.agentRegistryId ?? "?",
       cli: r.cli,
@@ -225,6 +398,9 @@ export async function GET() {
     activeWorkers: Array.from(activeWorkers),
     activeClis: Array.from(activeClis),
     activeProviders: Array.from(activeProviders),
+    activeServices,
+    operatorActive,
+    paperclipActive,
     recentToolCalls: recentAuditCalls.map((a) => ({
       ts: a.ts,
       tool: a.tool,
@@ -239,6 +415,8 @@ export async function GET() {
           ? Math.round((items.filter((r) => r.success).length / items.length) * 100)
           : 0,
       totalCostToday: items.reduce((s, r) => s + r.costUsd, 0),
+      // Number of concurrent agents working right now
+      activeAgentCount: activeWorkers.size,
     },
   });
 }
