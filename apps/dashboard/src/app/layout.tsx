@@ -9,6 +9,7 @@ import {
   Sparkles,
   Shield,
   Terminal,
+  Workflow,
 } from "lucide-react";
 import { safeFetch, URLS } from "@/lib/fetcher";
 
@@ -19,6 +20,7 @@ export const metadata: Metadata = {
 
 const NAV = [
   { href: "/", label: "Overview", icon: Activity },
+  { href: "/flow", label: "Flow", icon: Workflow },
   { href: "/quota", label: "Quota", icon: Gauge },
   { href: "/learning", label: "Learning", icon: Sparkles },
   { href: "/policy", label: "Policy", icon: Shield },
