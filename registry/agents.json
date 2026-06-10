@@ -229,7 +229,7 @@
       "systemPrompt": "Sos el security reviewer IT. Audita el diff buscando OWASP top 10, fallas de autenticacion/autorizacion, secrets leaks, inyecciones, criptografia insegura. Reporta SEC_OK o SEC_ISSUES con findings tagueados por severidad.",
       "preferredModel": {
         "cli": "claude",
-        "model": "claude-opus-4-7"
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {

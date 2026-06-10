@@ -90,6 +90,12 @@ services:
       # AICOS R5 patch: allow agents of the same company to comment/patch each
       # other's issues. Multi-tenant cross-company stays blocked.
       PAPERCLIP_ALLOW_INTRA_COMPANY_AGENT_MUTATIONS: "true"
+      # AICOS recovery-action bypass: agent IDs listed here can resolve recovery
+      # actions stamped by the watchdog for ANY owner. Used by the bridge so
+      # updateStatus() doesn't get 403'd after every run that hits the watchdog.
+      # Comma-separated UUIDs. The first one MUST be the Hermes/CEO agent
+      # whose key the bridge uses for its system-level mutations.
+      PAPERCLIP_SYSTEM_AGENT_IDS: ${AICOS_HERMES_AGENT_ID:-6d1942fe-49e0-4564-a13e-ef197014291c}
     volumes:
       - paperclip-data:/paperclip
       # AICOS Path A: mount the host's home at the SAME path inside the
