@@ -18,7 +18,7 @@ from pathlib import Path
 
 # Make the installer/lib modules importable.
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import preflight, hermes, clis, telegram_setup, paperclip_setup, services_setup  # noqa: E402
+from lib import preflight, vendor, hermes, clis, telegram_setup, paperclip_setup, services_setup  # noqa: E402
 from lib.ui import title, ok, warn, err, header, prompt_text, prompt_select, prompt_yesno  # noqa: E402
 
 
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reset", action="store_true",
                    help="ignore previous state file and start clean")
     p.add_argument("--skip", action="append", default=[],
-                   choices=["preflight", "hermes", "clis", "telegram", "paperclip", "services"],
+                   choices=["preflight", "vendor", "hermes", "clis", "telegram", "paperclip", "services"],
                    help="skip a specific phase (repeatable)")
     return p.parse_args()
 
@@ -78,6 +78,7 @@ def main() -> int:
 
     phases = [
         ("preflight",       preflight.configure),
+        ("vendor",          vendor.configure),
         ("hermes",          hermes.configure),
         ("clis",            clis.configure),
         ("telegram",        telegram_setup.configure),
