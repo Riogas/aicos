@@ -14,3 +14,4 @@ dist/
 # Docker volumes son externos al repo, ignoramos cualquier cosa local
 data/
 vendor/
+__pycache__/
