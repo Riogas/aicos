@@ -41,19 +41,21 @@ def _hermes(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
 
 
+HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
+
+
 def _install_hermes() -> bool:
-    """Best-effort install — use the official pip route."""
-    info("Installing Hermes CLI via pip…")
+    """Official installer: clones hermes-agent into ~/.hermes/hermes-agent,
+    creates its venv, and drops the `hermes` wrapper in ~/.local/bin."""
+    info(f"Installing Hermes Agent ({HERMES_INSTALL_URL})…")
     try:
         subprocess.run(
-            ["pip", "install", "--user", "--upgrade", "hermes-agent"],
-            check=True, capture_output=True, text=True,
+            ["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash"],
+            check=True,
         )
-        # Run postinstall to fetch node/browser deps.
-        subprocess.run(["hermes", "postinstall"], check=False)
-        return True
+        return _find_hermes_python() is not None
     except Exception as e:
-        warn(f"hermes install via pip failed: {e}")
+        warn(f"hermes install failed: {e}")
         return False
 
 
@@ -74,7 +76,10 @@ def configure(state: dict) -> dict:
         warn("hermes not detected")
         if state.get("non_interactive") or prompt_yesno("Install Hermes CLI now?", default=True):
             if not _install_hermes():
-                raise RuntimeError("hermes install failed — see https://hermes.example for manual setup")
+                raise RuntimeError(
+                    "hermes install failed — manual route: "
+                    "https://github.com/NousResearch/hermes-agent#installation"
+                )
 
     # Re-detect.
     py = _find_hermes_python()
@@ -91,6 +96,7 @@ def configure(state: dict) -> dict:
         ("display.busy_ack_detail",                  "false"),
         ("display.turn_completion_explainer",        "false"),
         ("display.tool_progress",                    "none"),
+        ("display.tool_progress_command",            "false"),
         ("agent.gateway_notify_interval",            "3600"),
     ]
     for k, v in quiet_settings:

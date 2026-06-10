@@ -23,45 +23,45 @@ from pathlib import Path
 from .ui import ok, warn, info, prompt_yesno, prompt_select, prompt_text
 
 
+# Install/login commands validated against the reference install (2026-06).
+# "login_hint" is printed, never executed — every OAuth flow here is
+# interactive/browser-based and doesn't compose with a wizard.
 CLI_CATALOG = {
     "claude": {
         "name":         "Claude Code (Anthropic)",
         "check_cmd":    ["claude", "--version"],
         "install_url":  "https://docs.claude.com/en/docs/claude-code/quickstart",
         "install_cmd":  ["npm", "install", "-g", "@anthropic-ai/claude-code"],
-        "login_cmd":    ["claude", "setup-token"],
+        "login_hint":   "claude   (arranca y corré /login — suscripción)  |  claude setup-token (token de larga vida)",
         "api_env_var":  "ANTHROPIC_API_KEY",
-        "creds_dir":    str(Path.home() / ".claude"),
         "default_models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4"],
     },
     "codex": {
         "name":         "Codex CLI (OpenAI/ChatGPT)",
         "check_cmd":    ["codex", "--version"],
-        "install_url":  "https://platform.openai.com/docs/codex",
-        "install_cmd":  ["npm", "install", "-g", "@openai/codex-cli"],
-        "login_cmd":    ["codex", "auth", "login"],
+        "install_url":  "https://developers.openai.com/codex/cli",
+        "install_cmd":  ["npm", "install", "-g", "@openai/codex"],
+        "login_hint":   "codex login   (browser OAuth con la cuenta ChatGPT)",
         "api_env_var":  "OPENAI_API_KEY",
-        "creds_dir":    str(Path.home() / ".codex"),
         "default_models": ["gpt-5.5", "gpt-5", "gpt-4o"],
     },
     "agy": {
-        "name":         "Antigravity / Gemini CLI (Google)",
+        "name":         "Antigravity CLI (Google)",
         "check_cmd":    ["agy", "--version"],
-        "install_url":  "https://gemini.google.dev/cli",
-        "install_cmd":  ["npm", "install", "-g", "@google/antigravity-cli"],
-        "login_cmd":    ["agy", "login"],
+        "install_url":  "https://antigravity.google",
+        # No es un paquete npm — instala un binario standalone en ~/.local/bin.
+        "install_cmd":  ["bash", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"],
+        "login_hint":   "agy   (el primer arranque interactivo abre el browser para autenticar)",
         "api_env_var":  "GOOGLE_API_KEY",
-        "creds_dir":    str(Path.home() / ".config" / "antigravity"),
         "default_models": ["gemini-3", "gemini-2.5-pro"],
     },
     "opencode": {
-        "name":         "OpenCode (router to open-weights — Kimi, Mimo, DeepSeek)",
+        "name":         "OpenCode (router a open-weights — Kimi, MiMo, DeepSeek)",
         "check_cmd":    ["opencode", "--version"],
         "install_url":  "https://opencode.ai",
-        "install_cmd":  ["npm", "install", "-g", "opencode"],
-        "login_cmd":    ["opencode", "auth"],
+        "install_cmd":  ["npm", "install", "-g", "opencode-ai"],
+        "login_hint":   "bash scripts/setup-opencode-auth.sh   (keys Moonshot/Xiaomi/OpenRouter + opencode.json de permisos)",
         "api_env_var":  "OPENROUTER_API_KEY",
-        "creds_dir":    str(Path.home() / ".config" / "opencode"),
         "default_models": ["moonshotai/kimi-k2.6", "xiaomi/mimo-vl-7b-rl"],
     },
 }
@@ -76,54 +76,30 @@ def _installed(cli: str) -> bool:
 
 
 def _try_install(cli: str, spec: dict) -> bool:
-    if _which("npm") and spec["install_cmd"][0] == "npm":
+    cmd = spec["install_cmd"]
+    runnable = cmd[0] != "npm" or _which("npm")
+    if runnable:
         try:
-            subprocess.run(spec["install_cmd"], check=True)
-            return _installed(cli)
+            subprocess.run(cmd, check=True)
+            if _installed(cli):
+                return True
         except subprocess.CalledProcessError:
             pass
     warn(f"Could not auto-install {cli}. Install manually: {spec['install_url']}")
     return False
 
 
-def _set_api_key(cli: str, spec: dict, key: str) -> None:
-    """Persist an API key for a CLI in a way it'll pick up automatically.
+def _set_api_key(state: dict, spec: dict, key: str) -> None:
+    """Persist an API key so the bridge's spawned CLIs see it.
 
-    Each CLI has its own convention — we write a small shell snippet to
-    ~/.aicos/api-keys.env which the bridge launcher sources, AND we drop
-    the right cred file in each CLI's home where it's idiomatic.
+    The bridge runs as a systemd unit with EnvironmentFile=infra/.env.bridge
+    and passes its env down to every CLI child process — so the only place a
+    key needs to live is state["cli_api_keys"]; the services phase merges
+    those into .env.bridge when it renders env files.
     """
-    env_path = Path.home() / ".aicos" / "api-keys.env"
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Update or insert.
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                k, v = line.split("=", 1)
-                existing[k.strip()] = v
-    existing[spec["api_env_var"]] = key
-    env_path.write_text(
-        "\n".join(f"{k}={v}" for k, v in existing.items()) + "\n",
-        encoding="utf-8",
-    )
-    try:
-        env_path.chmod(0o600)
-    except Exception:
-        pass
-    ok(f"  wrote {spec['api_env_var']} → {env_path}")
-
-    # Per-CLI conventional location too.
-    creds_dir = Path(spec["creds_dir"])
-    creds_dir.mkdir(parents=True, exist_ok=True)
-    api_key_path = creds_dir / "api-key"
-    api_key_path.write_text(key)
-    try:
-        api_key_path.chmod(0o600)
-    except Exception:
-        pass
-    ok(f"  wrote {api_key_path}")
+    keys = state.setdefault("cli_api_keys", {})
+    keys[spec["api_env_var"]] = key
+    ok(f"  {spec['api_env_var']} guardada — la fase services la escribe en infra/.env.bridge")
 
 
 def configure(state: dict) -> dict:
@@ -183,17 +159,25 @@ def configure(state: dict) -> dict:
 
         if mode == "oauth":
             info(f"Run this in a separate terminal to log in:")
-            info(f"    {' '.join(spec['login_cmd'])}")
+            info(f"    {spec['login_hint']}")
         elif mode == "api-key":
             existing = os.environ.get(spec["api_env_var"])
             mask = f"…{existing[-4:]}" if existing else "unset"
             v = prompt_text(f"  Paste {spec['api_env_var']} [{mask}]", default="", secret=True)
             if v:
-                _set_api_key(cli, spec, v)
+                _set_api_key(state, spec, v)
             else:
                 warn(f"  no key entered for {cli} — skipped")
         elif mode == "skip":
             info(f"  {cli} auth skipped — configure later before runs go to it")
+
+    # opencode necesita ADEMAS un opencode.json de permisos en cada workspace —
+    # sin eso no-opea en silencio (edit/bash denied). setup-opencode-auth.sh
+    # lo deja en todos los workspaces registrados.
+    if "opencode" in enabled and _installed("opencode"):
+        info("")
+        info("Recordatorio opencode: corré `bash scripts/setup-opencode-auth.sh` para")
+        info("keys de Moonshot/Xiaomi y el opencode.json de permisos por workspace.")
 
     state.setdefault("phases_done", []).append("clis")
     return state

@@ -22,9 +22,10 @@ from .ui import ok, warn, info, prompt_yesno
 
 
 PAPERCLIP_REPO = "https://github.com/paperclipai/paperclip.git"
-# Pinned to a known-good commit. Bump when you've re-validated patches
-# against a newer upstream.
-PAPERCLIP_PIN  = "master"   # TODO: set this to a SHA once we know one works
+# Pinned to a known-good upstream commit — the base that installer/patches/*
+# were validated against. Bump ONLY after re-validating the patches apply
+# cleanly on the new SHA (run this phase against a scratch clone).
+PAPERCLIP_PIN  = "524e18b0"
 
 
 def _clone(repo_root: Path) -> Path:
@@ -33,12 +34,15 @@ def _clone(repo_root: Path) -> Path:
         ok(f"vendor/paperclip already present")
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
-    info(f"Cloning Paperclip from {PAPERCLIP_REPO}…")
-    subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", PAPERCLIP_PIN, PAPERCLIP_REPO, str(target)],
-        check=True,
-    )
-    ok(f"cloned to {target}")
+    info(f"Fetching Paperclip {PAPERCLIP_PIN} from {PAPERCLIP_REPO}…")
+    # `git clone --branch` doesn't accept a SHA, so init+fetch the pin
+    # directly (GitHub allows fetching arbitrary SHAs with depth=1).
+    target.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(target)], check=True)
+    subprocess.run(["git", "-C", str(target), "remote", "add", "origin", PAPERCLIP_REPO], check=True)
+    subprocess.run(["git", "-C", str(target), "fetch", "--depth", "1", "origin", PAPERCLIP_PIN], check=True)
+    subprocess.run(["git", "-C", str(target), "checkout", "-q", "FETCH_HEAD"], check=True)
+    ok(f"checked out {PAPERCLIP_PIN} at {target}")
     return target
 
 
@@ -60,6 +64,16 @@ def _apply_patches(vendor: Path, patches_dir: Path) -> None:
     for p in patches:
         if p.name in applied:
             ok(f"patch already applied: {p.name}")
+            continue
+        # Already present in the tree (e.g. a vendor checkout where the patch
+        # got committed)? --reverse --check succeeding means the content is in.
+        r_rev = subprocess.run(
+            ["git", "apply", "--check", "--reverse", str(p)],
+            cwd=vendor, capture_output=True, text=True,
+        )
+        if r_rev.returncode == 0:
+            ok(f"patch content already present: {p.name} — recording, not re-applying")
+            fresh_applied.append(p.name)
             continue
         info(f"applying {p.name}…")
         r = subprocess.run(

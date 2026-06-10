@@ -73,6 +73,8 @@ Title "Ubuntu initialization"
 
 # Enable systemd inside the distro so we can use --user systemctl for the
 # bridge/dashboard services.
+# NB: el contenido viaja por stdin (`bash -s`) — pasarlo como argumento rompe
+# el quoting de PowerShell 5.1 con strings multilinea.
 $wslConf = @"
 [boot]
 systemd=true
@@ -83,9 +85,7 @@ appendWindowsPath=false
 [user]
 default=root
 "@
-wsl -d Ubuntu-24.04 -u root -- bash -c "cat > /etc/wsl.conf <<'EOF'
-$wslConf
-EOF"
+$wslConf | wsl -d Ubuntu-24.04 -u root -- bash -c "cat > /etc/wsl.conf"
 Ok "wsl.conf written (systemd=true)"
 
 # Restart the distro so wsl.conf takes effect.
@@ -124,7 +124,8 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 echo OK
 '@
-wsl -d Ubuntu-24.04 -u root -- bash -c $bootstrap
+# stdin otra vez — un script multilinea como argumento se desarma en PS 5.1.
+$bootstrap | wsl -d Ubuntu-24.04 -u root -- bash -s
 
 Ok "Base packages installed (docker / node 22 / pnpm / python)"
 
@@ -132,12 +133,14 @@ Ok "Base packages installed (docker / node 22 / pnpm / python)"
 $repoOnHost = (Resolve-Path "$PSScriptRoot\..").Path
 $repoOnWsl  = "/root/aicos"
 Title "Copying repo into WSL"
-$winPath = $repoOnHost -replace "\\","/"
-$winPath = $winPath -replace "^([A-Za-z]):","/mnt/`$1".ToLower() -replace "^/mnt/([A-Za-z])","/mnt/`$1".ToLower()
-# Normalize drive letter to lowercase
-$winPath = $winPath -replace "^/mnt/([A-Z])", { "/mnt/" + $args[0].Groups[1].Value.ToLower() }
+# C:\foo\bar → /mnt/c/foo/bar (conversion manual — compatible PS 5.1, sin
+# -replace con scriptblock que es PS6+).
+$driveLetter = $repoOnHost.Substring(0, 1).ToLower()
+$pathRest    = $repoOnHost.Substring(2) -replace "\\", "/"
+$winPath     = "/mnt/$driveLetter$pathRest"
 
 wsl -d Ubuntu-24.04 -u root -- bash -c "mkdir -p '$repoOnWsl' && cp -a '$winPath'/. '$repoOnWsl/' && chown -R root:root '$repoOnWsl'"
+if ($LASTEXITCODE -ne 0) { Fail "repo copy into WSL failed (source: $winPath)" }
 Ok "Repo at $repoOnWsl"
 
 # ── 8. Hand off to the Linux installer inside WSL ────────────────────────────

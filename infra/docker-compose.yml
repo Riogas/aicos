@@ -71,11 +71,11 @@ services:
     # Para que Paperclip pueda llamar al bridge en el host (aicos-bridge --serve
     # corre en :7100 del host).
     # WSL+Docker quirk: `host-gateway` se mapea a la interfaz wrong (172.16.x.x WSL/Windows)
-    # en vez del gateway del network. Pinear a la IP del gateway de infra_default que
-    # SI tiene route hacia el host. Verificar con:
-    #   docker network inspect infra_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+    # en vez del gateway del network. La red `default` de este compose tiene
+    # subnet/gateway FIJOS (ver bloque networks: al final) así esta IP nunca
+    # se desincroniza cuando Docker recrea la red.
     extra_hosts:
-      - "host.docker.internal:172.18.0.1"
+      - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/paperclip
       PORT: "3100"
@@ -95,15 +95,16 @@ services:
       # updateStatus() doesn't get 403'd after every run that hits the watchdog.
       # Comma-separated UUIDs. The first one MUST be the Hermes/CEO agent
       # whose key the bridge uses for its system-level mutations.
-      PAPERCLIP_SYSTEM_AGENT_IDS: ${AICOS_HERMES_AGENT_ID:-6d1942fe-49e0-4564-a13e-ef197014291c}
+      PAPERCLIP_SYSTEM_AGENT_IDS: ${AICOS_HERMES_AGENT_ID:-}
     volumes:
       - paperclip-data:/paperclip
       # AICOS Path A: mount the host's home at the SAME path inside the
       # container so workspace cwd values (which are host-absolute, e.g.
-      # /home/jgomez/Projects/riogas-pwa) resolve identically when the
-      # process adapter spawns the bridge. Node 24 is already inside this
-      # image so the bridge JS runs natively without extra runtime install.
-      - /home/jgomez:/home/jgomez:rw
+      # ~/Projects/riogas-pwa) resolve identically when the process adapter
+      # spawns the bridge. Node 24 is already inside this image so the
+      # bridge JS runs natively without extra runtime install.
+      # AICOS_HOST_HOME lo escribe el installer en infra/.env.
+      - ${AICOS_HOST_HOME:-/home/jgomez}:${AICOS_HOST_HOME:-/home/jgomez}:rw
     ports:
       - "3100:3100"
     healthcheck:
@@ -241,7 +242,7 @@ services:
       AICOS_COMPANY_ID: ${AICOS_COMPANY_ID}
       AICOS_HERMES_AGENT_ID: ${AICOS_HERMES_AGENT_ID}
     extra_hosts:
-      - "host.docker.internal:172.18.0.1"
+      - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     ports:
       - "3000:3000"
     healthcheck:
@@ -264,7 +265,7 @@ services:
       AICOS_HOSTNAME: ${AICOS_HOSTNAME:-localhost}
       AICOS_TLS_EMAIL: ${AICOS_TLS_EMAIL:-admin@example.com}
     extra_hosts:
-      - "host.docker.internal:172.18.0.1"
+      - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -287,3 +288,14 @@ volumes:
   paperclip-data:
   caddy-data:
   caddy-config:
+
+# Subnet/gateway FIJOS para que host.docker.internal (extra_hosts arriba)
+# nunca quede apuntando a una IP vieja cuando Docker recrea la red.
+# Si 172.28.0.0/16 colisiona en tu LAN, override con AICOS_DOCKER_SUBNET /
+# AICOS_DOCKER_GATEWAY en infra/.env.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${AICOS_DOCKER_SUBNET:-172.28.0.0/16}
+          gateway: ${AICOS_DOCKER_GATEWAY:-172.28.0.1}

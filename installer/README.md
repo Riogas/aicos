@@ -26,9 +26,7 @@ Ambos bootstrap:
 
 Si el repo ya existe en el destino, hace `git fetch + reset --hard` para tomar lo último, y vuelve a correr el wizard.
 
-## Qué hace el wizard
-
-En Windows el wizard:
+En Windows el wizard además:
 1. Verifica/instala WSL2 con Ubuntu 24.04
 2. Habilita systemd dentro de WSL
 3. Copia el repo dentro de WSL
@@ -36,26 +34,55 @@ En Windows el wizard:
 
 ## Qué configura
 
-| Módulo | Pasos del wizard |
+| Fase | Pasos del wizard |
 |---|---|
-| **Preflight** | Docker, Node 22, pnpm, Python 3.10+, conexión |
-| **Vendor** | clone upstream de Paperclip + aplicar `installer/patches/*.patch` |
-| **Hermes** | install CLI, OAuth login o API keys de providers, modo silencioso |
-| **CLIs (opcional)** | claude, codex, agy/gemini, opencode — cada uno con OAuth o API key |
-| **Telegram** | via Hermes-gateway o bot dedicado con webhook al bridge |
-| **Paperclip** | crear company + claim Hermes agent + generar agent-keys.json |
-| **Services** | levantar docker compose, instalar systemd units, healthcheck |
+| **preflight** | Docker, Node 20+, pnpm, estructura del repo |
+| **vendor** | clone de Paperclip pinned a SHA conocido + `installer/patches/*.patch` |
+| **hermes** | install oficial de hermes-agent (NousResearch), quiet-mode, auth |
+| **clis** (opcional) | claude / codex / agy (Antigravity) / opencode — OAuth o API key |
+| **telegram** | vía Hermes-gateway o bot dedicado con webhook al bridge |
+| **paperclip** | board token (aprobación browser 1 vez) → company → agente "AICOS Hermes" + key → invite → onboard 26 especialistas auto-aprobados → adapter `process` |
+| **workspaces** | primer proyecto en Paperclip + mapping projectId→cwd local |
+| **services** | env files, docker compose, systemd user units, healthcheck |
+
+### El paso de aprobación browser (fase paperclip)
+
+Paperclip corre en modo `authenticated`/`private`: las mutaciones board
+necesitan un token. El wizard crea un **CLI-auth challenge** y te muestra
+dos URLs:
+
+1. `http://localhost:3100` — registrate (el primer usuario de la instancia
+   queda como admin)
+2. la `approvalUrl` del challenge — click en **Approve**
+
+El wizard pollea hasta la aprobación y de ahí en más todo es automático
+(company, agentes, invites, approvals, keys).
+
+## Quién corre dónde
+
+- **docker compose** (`infra/docker-compose.yml`): postgres, redis, qdrant,
+  paperclip, quota-manager (7001), policy-engine (7002), learning (7003),
+  tool-gateway (7004). El compose también define un servicio `aicos-dashboard`
+  pero el wizard NO lo levanta (clash :3000 con el de systemd).
+- **systemd --user** (host): `aicos-bridge` (7100), `aicos-dashboard` (3000),
+  `hermes-gateway`. Los units viven en `infra/systemd/` y el wizard los copia
+  a `~/.config/systemd/user/`. El bridge corre en el host porque spawnea los
+  CLIs (claude/codex/agy/opencode) con tus credenciales locales.
+- La red del compose tiene subnet fija (`172.28.0.0/16`) para que
+  `host.docker.internal` siempre apunte al gateway correcto. Override:
+  `AICOS_DOCKER_SUBNET` / `AICOS_DOCKER_GATEWAY` en `infra/.env`.
 
 ## Diseño
 
 - `install.sh` / `install.ps1`: entrypoints que preparan el host
-- `wizard.py`: cerebro común, escribe configs, hace preguntas
-- `lib/`: módulos por sección (preflight, hermes, clis, telegram, paperclip, services)
-- `templates/`: plantillas `.env`, systemd units, etc.
+- `wizard.py`: cerebro común — loop de fases, estado resumible
+- `lib/`: un módulo por fase (`preflight`, `vendor`, `hermes`, `clis`,
+  `telegram_setup`, `paperclip_setup`, `workspaces`, `services_setup`)
+- `patches/`: patches que el wizard aplica sobre `vendor/paperclip`
 
 Cada módulo expone `def configure(state: dict) -> dict` que muta `state` con
-lo que el usuario fue eligiendo. Al final `services.bring_up(state)` materializa
-todo en archivos + arranca containers + verifica.
+lo que el usuario fue eligiendo. El estado se persiste en
+`.secrets/wizard-state.json` después de cada fase (resumible con Ctrl-C).
 
 ## Salidas
 
@@ -64,29 +91,29 @@ Después del wizard tenés:
 ```
 ~/aicos/
   .secrets/
-    paperclip-claim-response.json   # company + Hermes API key
+    wizard-state.json                # estado resumible del wizard (0600)
+    paperclip-claim-response.json    # key del agente "AICOS Hermes" (bridge identity)
     agent-keys.json                  # 26 agent tokens
-    api-keys.env                     # opcional, si elegiste API keys
-  infra/.env                          # docker compose env
-  registry/agents.json                # 26 agentes onboarded
-  registry/project-workspaces.json    # tus proyectos
+    agent-onboarding-state.json      # progreso del onboarding (resumible)
+  infra/.env                         # docker compose env
+  infra/.env.bridge                  # env del bridge (systemd EnvironmentFile)
+  registry/agents.json               # 26 agentes con paperclipAgentId reales
+  registry/project-workspaces.json   # tus proyectos
 ```
 
 Servicios corriendo:
 
-- Postgres :5432
-- Redis :6379
-- Qdrant :6333
-- Paperclip :3100
-- Bridge :7100 (systemd)
+- Postgres :5432 / Redis :6379 / Qdrant :6333 (docker)
+- Paperclip :3100 (docker) — ticket board UI
+- Quota :7001 / Policy :7002 / Learning :7003 / Gateway :7004 (docker)
+- Bridge :7100 (systemd) — orchestrate/telegram/approve/SSE/metrics
 - Dashboard :3000 (systemd) — `http://localhost:3000/flow`
-- Quota/Policy/Learning/Gateway :7001-7004
-- Caddy :443 (opcional, profile=proxy)
+- Caddy :443 (opcional, `--profile proxy`)
 
 ## Re-correr
 
 El wizard es **idempotente** — re-ejecutarlo:
 - Detecta lo ya instalado y solo pregunta lo que falta
 - Permite re-rotar API keys
-- Permite agregar/quitar CLIs sin volver a empezar
-- Permite migrar de OAuth a API key (y al revés)
+- Permite agregar/quitar CLIs o workspaces sin volver a empezar
+- `--skip <fase>` saltea una fase puntual; `--reset` arranca de cero
