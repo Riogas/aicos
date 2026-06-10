@@ -13,7 +13,9 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
-import { NarrationFeed } from "@/components/flow/narration";
+import { NarrationFeed, useFlowEvents } from "@/components/flow/narration";
+import { BootSequence } from "@/components/flow/boot";
+import { StatusStrip, TickerTape, ConsolePanel, RunsSparkline } from "@/components/flow/hud-chrome";
 import {
   OperatorNode,
   BrainNode,
@@ -231,9 +233,17 @@ export function FlowViewer() {
   }, []);
 
   const { nodes, edges } = useMemo(() => buildGraph(state), [state]);
+  const { cards, log } = useFlowEvents(state);
+  const survival = Boolean(state?.quota?.survival);
 
   return (
     <ReactFlowProvider>
+      {/* Ambient radar sweep + concentric rings BEHIND the graph */}
+      <div className={`radar-layer ${survival ? "red-alert" : ""}`}>
+        <div className="radar-rings" />
+        <div className="radar-sweep" />
+      </div>
+
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -252,8 +262,28 @@ export function FlowViewer() {
         <Background gap={48} size={1} color="rgba(0,217,255,0.08)" />
         <Controls showInteractive={false} />
 
+        {/* Depth vignette over the graph, under the panels */}
+        <div className="hud-vignette" />
+
+        {/* RED ALERT frame when survival mode engages */}
+        {survival && <div className="red-alert-frame" />}
+
+        {/* Top-center status strip: live clock + mode + counts */}
+        <StatusStrip
+          survival={survival}
+          liveCount={state?.liveRuns?.length ?? 0}
+          agentCount={state?.bridge.agentCount ?? 0}
+          healthy={state?.bridge.healthy !== false}
+        />
+
         {/* JARVIS narration feed — pops up when something changes */}
-        <NarrationFeed snapshot={state} />
+        <NarrationFeed cards={cards} />
+
+        {/* Persistent terminal log (bottom-left) */}
+        <ConsolePanel log={log} />
+
+        {/* Recent-runs ticker tape (bottom, stock-ticker style) */}
+        <TickerTape recent={state?.recent ?? []} />
 
         {state && (
           <div
@@ -292,6 +322,15 @@ export function FlowViewer() {
                 </div>
               </div>
             </div>
+            {state.recent && state.recent.length > 0 && (
+              <>
+                <div className="my-1.5 h-px bg-hud-dim" />
+                <div className="mb-1 font-mono text-[8px] uppercase tracking-widest text-hud-dim">
+                  ACTIVITY · 2H
+                </div>
+                <RunsSparkline recent={state.recent} />
+              </>
+            )}
             {state.liveRun && (
               <>
                 <div className="my-1.5 h-px bg-hud-dim" />
@@ -370,6 +409,9 @@ export function FlowViewer() {
           </div>
         )}
       </ReactFlow>
+
+      {/* Cinematic boot sequence — once per session, click to skip */}
+      <BootSequence />
     </ReactFlowProvider>
   );
 }
@@ -467,6 +509,7 @@ function buildGraph(s: FlowState | null): { nodes: Node[]; edges: Edge[] } {
         active: isHistoricActive || isLiveNow,
         success: undefined,
         ticket: myLiveRun?.ticketIdentifier ?? undefined,
+        stage: myLiveRun?.stage ?? (isLiveNow ? "dispatched" : undefined),
       },
     });
     edges.push({

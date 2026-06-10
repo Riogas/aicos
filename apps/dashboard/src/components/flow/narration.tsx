@@ -246,15 +246,25 @@ function deriveEvents(prev: FlowSnapshot | null, curr: FlowSnapshot): FlowEvent[
 /* ───────────────────────────────────────────────────────────────
    Notification feed — JARVIS comm popups
 ─────────────────────────────────────────────────────────────── */
-interface ActiveEvent extends FlowEvent {
+export interface ActiveEvent extends FlowEvent {
   spawnedAt: number;
 }
 
 const MAX_EVENTS = 5;
+const MAX_LOG = 60;
 const DISPLAY_MS = 7000;
 
-export function NarrationFeed({ snapshot }: { snapshot: FlowSnapshot | null }) {
-  const [events, setEvents] = useState<ActiveEvent[]>([]);
+/**
+ * Shared event pipeline: derives events from snapshot diffs and keeps BOTH
+ * the ephemeral popup list (cards) and a persistent history (log) that the
+ * ConsolePanel renders as a terminal.
+ */
+export function useFlowEvents(snapshot: FlowSnapshot | null): {
+  cards: ActiveEvent[];
+  log: FlowEvent[];
+} {
+  const [cards, setCards] = useState<ActiveEvent[]>([]);
+  const [log, setLog] = useState<FlowEvent[]>([]);
   const prevSnapRef = useRef<FlowSnapshot | null>(null);
 
   useEffect(() => {
@@ -263,28 +273,37 @@ export function NarrationFeed({ snapshot }: { snapshot: FlowSnapshot | null }) {
     prevSnapRef.current = snapshot;
     if (newOnes.length > 0) {
       const now = Date.now();
-      setEvents((prev) => {
+      setCards((prev) => {
         const seenIds = new Set(prev.map((e) => e.id));
         const fresh = newOnes
           .filter((e) => !seenIds.has(e.id))
           .map((e) => ({ ...e, spawnedAt: now }));
         return [...fresh, ...prev].slice(0, MAX_EVENTS);
       });
+      setLog((prev) => {
+        const seenIds = new Set(prev.map((e) => e.id));
+        const fresh = newOnes.filter((e) => !seenIds.has(e.id));
+        return [...fresh, ...prev].slice(0, MAX_LOG);
+      });
     }
   }, [snapshot]);
 
-  // Reaper: remove events older than DISPLAY_MS
+  // Reaper: remove popup cards older than DISPLAY_MS (log persists)
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
-      setEvents((prev) => prev.filter((e) => now - e.spawnedAt < DISPLAY_MS));
+      setCards((prev) => prev.filter((e) => now - e.spawnedAt < DISPLAY_MS));
     }, 500);
     return () => clearInterval(id);
   }, []);
 
+  return { cards, log };
+}
+
+export function NarrationFeed({ cards }: { cards: ActiveEvent[] }) {
   return (
     <div className="pointer-events-none absolute left-12 top-1/2 z-30 flex -translate-y-1/2 flex-col gap-2">
-      {events.map((e, i) => (
+      {cards.map((e, i) => (
         <NarrationCard key={e.id} event={e} index={i} />
       ))}
     </div>

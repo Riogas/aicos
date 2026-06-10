@@ -31,7 +31,7 @@ export default function FlowPage() {
           ◢ LIVE TACTICAL VIEW
         </div>
         <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
-          J.A.R.V.I.S. AGENT ORCHESTRATION OVERLAY · 2s REFRESH
+          J.A.R.V.I.S. AGENT ORCHESTRATION OVERLAY · SSE LINK · ADAPTIVE POLL
         </div>
       </div>
 
@@ -50,8 +50,8 @@ export default function FlowPage() {
           </span>
           SIGNAL · ONLINE
         </span>
-        <span className="text-hud">▮▮▮▮▮▮▯▯</span>
-        <span>v0.1 · BUILD 09JUN26</span>
+        <span className="text-hud">▮▮▮▮▮▮▮▯</span>
+        <span>v0.2 · BUILD 10JUN26</span>
       </div>
 
       <FlowViewer />

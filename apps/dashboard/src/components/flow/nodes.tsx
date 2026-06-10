@@ -4,7 +4,6 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import {
   Activity,
   Brain,
-  Cpu,
   Database,
   Gauge,
   Network,
@@ -298,6 +297,8 @@ export function BridgeNode({ data }: NodeProps) {
           {d.live && <animate attributeName="opacity" values="0.6;1;0.6" dur="1.4s" repeatCount="indefinite" />}
         </circle>
       </svg>
+      {/* Radar cone sweeping inside the reactor — always on, faster feel */}
+      <div className="reactor-cone" style={{ opacity: d.live ? 0.8 : 0.3 }} />
       {/* Concentric pulse rings when active */}
       {d.live && (
         <>
@@ -325,17 +326,54 @@ export function BridgeNode({ data }: NodeProps) {
   );
 }
 
+/* Run pipeline stages, in order — drives the live progress bar. */
+const RUN_STAGES = ["dispatched", "memory-retrieve", "quota-select", "cli-running", "posting-result", "done"];
+
+const DEPT_COLOR: Record<string, string> = {
+  IT: "#00d9ff",
+  MK: "#fbbf24",
+  RX: "#a855f7",
+};
+
 export function WorkerNode({ data }: NodeProps) {
-  const d = data as { name: string; role: string; department: string; active?: boolean; success?: boolean };
+  const d = data as {
+    name: string;
+    role: string;
+    department: string;
+    active?: boolean;
+    success?: boolean;
+    ticket?: string;
+    stage?: string | null;
+  };
   const tone: Tone = d.active ? "live" : d.success === false ? "err" : "idle";
+  const deptColor = DEPT_COLOR[d.department] ?? "#00d9ff";
+  const stageIdx = d.stage ? RUN_STAGES.indexOf(d.stage) : -1;
   return (
     <>
       <HexShell tone={tone} live={d.active} width={196} height={54}>
+        {/* Department accent stripe */}
+        <span
+          className="dept-stripe"
+          style={{
+            background: deptColor,
+            boxShadow: d.active ? `0 0 6px ${deptColor}` : "none",
+            opacity: d.active ? 1 : 0.45,
+          }}
+        />
         <NodeBody
           icon={Sparkles}
           title={d.name.toUpperCase()}
-          subtitle={`${d.department} · ${d.role}`}
+          subtitle={d.active && d.ticket ? `${d.department} · ${d.ticket}` : `${d.department} · ${d.role}`}
           tone={tone}
+          detail={
+            d.active && stageIdx >= 0 ? (
+              <span className="stage-bar" title={`stage: ${d.stage}`}>
+                {RUN_STAGES.map((st, i) => (
+                  <span key={st} className={i < stageIdx ? "done" : i === stageIdx ? "current" : ""} />
+                ))}
+              </span>
+            ) : undefined
+          }
         />
       </HexShell>
       <HandleStyled type="target" position={Position.Left} />
@@ -375,30 +413,54 @@ export function ProviderNode({ data }: NodeProps) {
   };
   const tone: Tone = !d.available ? "err" : (d.pct ?? 0) >= 80 ? "warn" : d.active ? "live" : d.critical ? "accent" : "idle";
   const pct = Math.round(d.pct ?? 0);
+  const gaugeColor = pct >= 80 ? "#fbbf24" : "#00d9ff";
+  const R = 9;
+  const CIRC = 2 * Math.PI * R;
   // Tooltip clarifies that the bar is a LOCAL counter, not the real session
   // usage exposed by the provider's web UI / interactive CLI commands.
   const tooltip = `Local Quota Manager budget — NOT real provider session usage.\nFor Anthropic Max-Plan, run /usage inside Claude Code to see real session %.\nFor pay-as-you-go API keys, configure LiteLLM and point the bridge at it.`;
   return (
     <>
       <HexShell tone={tone} live={d.active} critical={d.critical} width={180} height={58}>
-        <NodeBody
-          icon={Cpu}
-          title={d.name.toUpperCase()}
-          subtitle={d.critical ? "CRITICAL · LOCAL" : "PROVIDER · LOCAL"}
-          tone={tone}
-          detail={
-            <div className="flex items-center gap-1.5" title={tooltip}>
-              <span>{d.requests ?? 0}R</span>
-              <div className="h-0.5 w-10 overflow-hidden bg-hud-soft">
-                <div
-                  className={`h-full ${(d.pct ?? 0) >= 80 ? "bg-warning" : "bg-hud"}`}
-                  style={{ width: `${pct}%`, boxShadow: "0 0 4px rgba(0,217,255,0.8)" }}
-                />
-              </div>
-              <span>{pct}%</span>
-            </div>
-          }
-        />
+        <div className="flex w-full items-center gap-2" title={tooltip}>
+          {/* Radial quota gauge */}
+          <svg width={26} height={26} viewBox="0 0 26 26" className="shrink-0">
+            <circle cx={13} cy={13} r={R} fill="none" stroke="rgba(0,217,255,0.15)" strokeWidth={2.5} />
+            <circle
+              className="gauge-arc"
+              cx={13}
+              cy={13}
+              r={R}
+              fill="none"
+              stroke={gaugeColor}
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              strokeDasharray={`${(pct / 100) * CIRC} ${CIRC}`}
+              style={{
+                filter: `drop-shadow(0 0 3px ${gaugeColor})`,
+                transition: "stroke-dasharray 0.6s ease",
+              }}
+            />
+            <text
+              x={13}
+              y={14.5}
+              textAnchor="middle"
+              fill={gaugeColor}
+              style={{ font: "bold 6.5px var(--font-geist-mono, monospace)" }}
+            >
+              {pct}
+            </text>
+          </svg>
+          <div className="flex min-w-0 flex-col">
+            <span className={`truncate font-mono text-[11px] uppercase tracking-wider ${TONE_TEXT[tone]}`}>
+              {d.name.toUpperCase()}
+            </span>
+            <span className="truncate font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+              {d.critical ? "CRITICAL · LOCAL" : "PROVIDER · LOCAL"}
+            </span>
+            <span className="mt-0.5 font-mono text-[9px] tabular text-hud-dim">{d.requests ?? 0} REQ</span>
+          </div>
+        </div>
       </HexShell>
       <HandleStyled type="target" position={Position.Left} />
     </>

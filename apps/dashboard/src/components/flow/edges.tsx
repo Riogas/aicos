@@ -42,29 +42,34 @@ export function AnimatedEdge({
 
   return (
     <>
+      {/* Idle edges: cheap CSS dash-flow (the old per-edge SVG particle put
+          ~40 animateMotion loops on screen permanently). Live edges keep the
+          hot multi-particle beam. */}
       <BaseEdge
         id={id}
         path={path}
         markerEnd={markerEnd}
+        className={!d.active ? "edge-idle-flow" : undefined}
         style={{
           stroke: c,
-          strokeWidth: d.active ? 1.8 : 1.1,
-          filter: d.active ? `drop-shadow(0 0 6px ${c}) drop-shadow(0 0 12px ${c})` : `drop-shadow(0 0 2px ${c})`,
-          opacity: d.active ? 0.95 : 0.55,
-          transition: "all 0.4s ease",
+          strokeWidth: d.active ? 2 : 1,
+          filter: d.active ? `drop-shadow(0 0 6px ${c}) drop-shadow(0 0 14px ${c})` : "none",
+          opacity: d.active ? 0.95 : 0.5,
+          transition: "stroke 0.4s ease, opacity 0.4s ease",
         }}
       />
 
-      {/* Ambient idle particle — slow drift, just one dim dot */}
-      {!d.active && (
-        <circle r="1.2" fill={c} opacity="0.6">
-          <animateMotion dur="5.5s" repeatCount="indefinite" path={path} />
-        </circle>
-      )}
-
-      {/* Live multi-particle stream with trail */}
+      {/* Live: under-glow beam + multi-particle stream with trail */}
       {d.active && (
         <>
+          <path
+            d={path}
+            fill="none"
+            stroke={c}
+            strokeWidth={6}
+            opacity={0.12}
+            style={{ filter: `blur(3px)` }}
+          />
           <circle r="3.5" fill={c} opacity="1" style={{ filter: `drop-shadow(0 0 8px ${c})` }}>
             <animateMotion dur={duration} repeatCount="indefinite" path={path} />
           </circle>
