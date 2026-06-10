@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps (workspace)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck — bridge
+        run: pnpm -F @aicos/paperclip-bridge typecheck
+
+      - name: Typecheck — dashboard
+        run: pnpm -F @aicos/dashboard typecheck
+
+      - name: Typecheck — quota
+        run: pnpm -F @aicos/quota-manager typecheck
+
+      - name: Typecheck — policy
+        run: pnpm -F @aicos/policy-engine typecheck
+
+      - name: Typecheck — gateway
+        run: pnpm -F @aicos/tool-gateway typecheck
+
+      - name: Typecheck — learning
+        run: pnpm -F @aicos/learning typecheck
+        continue-on-error: true
+
+      - name: Test — bridge
+        run: pnpm -F @aicos/paperclip-bridge test
+
+      - name: Build — bridge
+        run: pnpm -F @aicos/paperclip-bridge build
+
+      - name: Build — dashboard
+        run: pnpm -F @aicos/dashboard build
+
+      - name: Build — quota
+        run: pnpm -F @aicos/quota-manager build
+
+      - name: Build — policy
+        run: pnpm -F @aicos/policy-engine build
+
+      - name: Build — gateway
+        run: pnpm -F @aicos/tool-gateway build

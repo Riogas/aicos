@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
+import Redis from "ioredis";
 import { PaperclipClient } from "./paperclip-client.js";
 import { executeRun } from "./run.js";
 import {
@@ -21,6 +22,9 @@ import {
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
 import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
+import { createRunQueue, type RunJobInput } from "./run-queue.js";
+import { resolvePersonaByRegistryId } from "./registry.js";
+import { attachMetrics } from "./metrics.js";
 
 const RunRequestSchema = z.object({
   issueId: z.string().optional(),
@@ -76,7 +80,71 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   // Stage-aware tracker shared between the HTTP /run path (in-process emit) and
   // the process-adapter path (POST /stage from inside the Paperclip container).
   // Emits SSE events on every transition.
-  const tracker = new InFlightTracker();
+  //
+  // When REDIS_URL is set the tracker persists state to Redis so an active
+  // run survives a bridge restart (and any reconnecting SSE clients see it).
+  const redisUrl = process.env.REDIS_URL;
+  const trackerRedis = redisUrl ? new Redis(redisUrl, { lazyConnect: true }) : undefined;
+  if (trackerRedis) {
+    try {
+      await trackerRedis.connect();
+      app.log.info("[tracker] connected to Redis for persistence");
+    } catch (e) {
+      app.log.warn({ err: (e as Error).message }, "[tracker] Redis connect failed — falling back to in-memory");
+    }
+  }
+  const tracker = new InFlightTracker({ redis: trackerRedis });
+
+  // ─── Prometheus instrumentation ──────────────────────────────────────────
+  attachMetrics(app, tracker);
+
+  // ─── Queue for /run jobs ─────────────────────────────────────────────────
+  // Uses Redis when available so a bridge restart doesn't drop in-flight jobs.
+  // Falls back to inline setImmediate when REDIS_URL is not configured.
+  const runQueue = createRunQueue(trackerRedis, async (job: RunJobInput) => {
+    const persona = job.personaRegistryId
+      ? resolvePersonaByRegistryId(job.personaRegistryId)
+      : undefined;
+    const workspace = job.workspaceProjectId
+      ? resolveWorkspaceByProjectId(job.workspaceProjectId)
+      : null;
+    const client =
+      paperclipReady && job.paperclipIssueId
+        ? new PaperclipClient(
+            { apiUrl: opts.paperclipApiUrl!, apiKey: opts.paperclipApiKey! },
+            job.runId,
+          )
+        : undefined;
+    try {
+      await executeRun({
+        prompt: job.prompt,
+        model: job.model,
+        provider: job.provider,
+        persona: persona ?? undefined,
+        workspace,
+        ticketIdentifier: job.ticketIdentifier,
+        paperclip:
+          client && job.paperclipIssueId
+            ? { client, issueId: job.paperclipIssueId }
+            : undefined,
+        quotaClient,
+        learningClient,
+        policyClient,
+        tracker,
+        runId: job.runId,
+        approved: job.approved,
+      });
+    } finally {
+      tracker.setStage(job.runId, "done");
+    }
+  });
+  app.log.info(
+    { persisted: runQueue.isPersisted() },
+    runQueue.isPersisted() ? "run queue Redis-backed" : "run queue inline (no Redis)",
+  );
+  app.addHook("onClose", async () => {
+    await runQueue.close();
+  });
   app.log.info(
     {
       quotaEnabled: quotaClient.isEnabled(),
@@ -394,26 +462,14 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
       model: persona.preferredModel?.model,
       ticketIdentifier,
     });
-    setImmediate(async () => {
-      try {
-        await executeRun({
-          prompt,
-          persona,
-          workspace,
-          ticketIdentifier,
-          paperclip: { client, issueId: issueId! },
-          quotaClient,
-          learningClient,
-          policyClient,
-          tracker,
-          runId: flightKey,
-          approved: true,
-        });
-      } catch (e) {
-        app.log.error({ err: (e as Error).message, issueId, runId: flightKey }, "approved run failed");
-      } finally {
-        tracker.setStage(flightKey, "done");
-      }
+    await runQueue.enqueue({
+      prompt,
+      personaRegistryId: persona.registryId,
+      workspaceProjectId: workspace?.projectName,
+      ticketIdentifier,
+      paperclipIssueId: issueId,
+      runId: flightKey,
+      approved: true,
     });
 
     return reply.code(202).send({
@@ -421,6 +477,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
       issueId,
       runId: flightKey,
       persona: persona.registryId,
+      queue: runQueue.isPersisted() ? "redis" : "inline",
     });
   });
 
@@ -764,45 +821,18 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         ticketIdentifier: ctxIssue?.identifier as string | undefined,
       });
 
-      setImmediate(async () => {
-        try {
-          const result = await executeRun({
-            prompt: prompt!,
-            model: parsed.model,
-            provider: parsed.provider,
-            persona: persona ?? undefined,
-            workspace,
-            ticketIdentifier: (ctxIssue?.identifier as string | undefined),
-            paperclip:
-              pcClient && issueId
-                ? { client: pcClient, issueId }
-                : undefined,
-            quotaClient,
-            learningClient,
-            policyClient,
-            tracker,
-            runId: flightKey,
-          });
-          app.log.info(
-            {
-              issueId,
-              runId: parsed.runId,
-              persona: persona?.registryId,
-              mode: result.mode,
-              exitCode: result.exitCode,
-              durationMs: result.durationMs,
-              outputLen: result.output.length,
-            },
-            "run completed",
-          );
-        } catch (e) {
-          app.log.error(
-            { err: (e as Error).message, issueId, runId: parsed.runId },
-            "run failed",
-          );
-        } finally {
-          tracker.setStage(flightKey, "done");
-        }
+      // Enqueue rather than setImmediate. The closure inside the queue's
+      // executor rebuilds the PaperclipClient + workspace + persona from
+      // the JSON-serializable job payload.
+      await runQueue.enqueue({
+        prompt: prompt!,
+        model: parsed.model,
+        provider: parsed.provider,
+        personaRegistryId: persona?.registryId,
+        workspaceProjectId: workspace?.projectName,
+        ticketIdentifier: ctxIssue?.identifier as string | undefined,
+        paperclipIssueId: issueId,
+        runId: flightKey,
       });
 
       return reply.code(202).send({
@@ -810,6 +840,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         issueId: issueId ?? null,
         runId: parsed.runId ?? null,
         persona: persona?.registryId ?? null,
+        queue: runQueue.isPersisted() ? "redis" : "inline",
       });
     },
   );

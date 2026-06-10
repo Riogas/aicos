@@ -1,0 +1,73 @@
+# AICOS reverse proxy / TLS terminator (Caddy 2).
+#
+# Two flavours, picked via the env var AICOS_HOSTNAME:
+#   - Set to a real public domain (e.g. aicos.example.com)   → auto LE cert.
+#   - Set to localhost                                       → internal self-signed.
+#   - Unset                                                  → Caddy refuses to start.
+#
+# Routes mounted under the single hostname so the dashboard can call
+# /api/bridge/* / /api/policy/* / /api/quota/* without CORS gymnastics.
+#
+# Bridge runs on the HOST (systemd) at :7100, not in a container, so we
+# proxy to host.docker.internal:7100.
+
+{
+	# Caddy auto-renews LE certs; explicit email here so renewal warnings
+	# go somewhere actionable.
+	email {$AICOS_TLS_EMAIL:admin@example.com}
+
+	# Allow self-signed for hostnames we own internally.
+	# (When AICOS_HOSTNAME = localhost / *.lan / *.internal Caddy uses LE if
+	#  it can resolve, otherwise falls back to its internal CA.)
+}
+
+{$AICOS_HOSTNAME} {
+	# Dashboard (Next.js) — pages + /api/* (login, flow-state, flow-events).
+	# Hits the systemd-launched dashboard on the host.
+	handle /api/login {
+		reverse_proxy host.docker.internal:3000
+	}
+	handle /api/flow-state {
+		reverse_proxy host.docker.internal:3000
+	}
+	handle /api/flow-events {
+		reverse_proxy host.docker.internal:3000 {
+			# Keep SSE connections open without buffering.
+			flush_interval -1
+		}
+	}
+
+	# Bridge: orchestrate / telegram / approve / cancel / events / metrics.
+	handle_path /api/bridge/* {
+		reverse_proxy host.docker.internal:7100 {
+			flush_interval -1
+		}
+	}
+
+	# Side services (containers on infra_default).
+	handle_path /api/quota/*    { reverse_proxy aicos-quota-manager:7001 }
+	handle_path /api/policy/*   { reverse_proxy aicos-policy-engine:7002 }
+	handle_path /api/learning/* { reverse_proxy aicos-learning:7003 }
+	handle_path /api/gateway/*  { reverse_proxy aicos-tool-gateway:7004 }
+
+	# Everything else → dashboard (so /flow, /login, static assets work).
+	handle {
+		reverse_proxy host.docker.internal:3000
+	}
+
+	# Common security headers. The dashboard sets its own CSP; we just
+	# add the boring ones here.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options    "nosniff"
+		X-Frame-Options           "SAMEORIGIN"
+		Referrer-Policy           "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Log to stdout so docker logs picks it up.
+	log {
+		output stdout
+		format json
+	}
+}
