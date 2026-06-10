@@ -1,0 +1,9 @@
+{
+  "transaccionId": "trx_789",
+  "cuponId": "cup_123",
+  "estado": "CANJEADO",
+  "estadoAnterior": "RESERVADO",
+  "canjeadoAt": "2026-06-10T14:30:03Z",
+  "aplicarDescuento": true,
+  "beneficiarioMasked": "***567-2"
+}

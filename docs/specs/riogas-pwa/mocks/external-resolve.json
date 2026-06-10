@@ -1,0 +1,31 @@
+{
+  "beneficiarioRef": "ext_ben_88291",
+  "codigoTipo": "CI",
+  "nombre": "Juan Pérez",
+  "promociones": [
+    {
+      "promocionRef": "ext_promo_13kg",
+      "nombre": "Descuento garrafa 13kg",
+      "usosRestantes": 2,
+      "usosMax": 3,
+      "stockDisponible": true,
+      "vigenteHasta": "2026-06-30T23:59:59Z"
+    },
+    {
+      "promocionRef": "ext_promo_3kg",
+      "nombre": "Garrafa 3kg",
+      "usosRestantes": 0,
+      "usosMax": 1,
+      "stockDisponible": true,
+      "vigenteHasta": "2026-06-30T23:59:59Z"
+    },
+    {
+      "promocionRef": "ext_promo_supergas_45",
+      "nombre": "Supergás 45kg",
+      "usosRestantes": 1,
+      "usosMax": 1,
+      "stockDisponible": false,
+      "vigenteHasta": "2026-07-15T23:59:59Z"
+    }
+  ]
+}

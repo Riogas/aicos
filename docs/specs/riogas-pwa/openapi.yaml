@@ -1,0 +1,492 @@
+openapi: 3.1.0
+info:
+  title: riogas-pwa API (mock contracts)
+  version: 0.1.0-mvp
+  description: >
+    Contratos mock del MVP riogas-pwa. Cubre el backend de la PWA (auth de sesión,
+    consulta de promociones por código, reserva 24h, estado/historial, canje del
+    repartidor, admin) y el contrato de la API EXTERNA de promociones que aún no
+    existe (sección /external). Tiempos en UTC (ISO-8601). JSON sobre HTTPS.
+    Ver arquitectura: docs/specs/2026-06-10-riogas-pwa-architecture.md
+servers:
+  - url: https://pwa.riogas.example/api/v1
+    description: Backend PWA
+  - url: https://provider.example/external/v1
+    description: API externa de promociones (a implementar por el proveedor)
+
+tags:
+  - name: auth
+  - name: promotions
+  - name: coupons
+  - name: redeem
+  - name: admin
+  - name: external
+
+paths:
+  # ─────────────────────────── AUTH (beneficiario) ───────────────────────────
+  /auth/session:
+    get:
+      tags: [auth]
+      summary: Sesión actual (emitida por Auth.js — Google o email/password)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Sesión válida
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [usuario]
+                properties:
+                  usuario: { $ref: "#/components/schemas/Usuario" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/onboarding/telefono:
+    post:
+      tags: [auth]
+      summary: Completar teléfono obligatorio post-signup
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [telefono]
+              properties:
+                telefono: { type: string, example: "+59899123456", description: "E.164" }
+      responses:
+        "200":
+          description: Teléfono guardado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usuario" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ─────────────────────── CONSULTA DE PROMOCIONES ───────────────────────────
+  /promotions/lookup:
+    post:
+      tags: [promotions]
+      summary: Resolver código libre → promociones disponibles/no disponibles/usadas
+      description: >
+        El usuario ingresa un único código libre sin elegir tipo (puede ser CI,
+        nº de funcionario o key SMS/WhatsApp). El backend lo resuelve contra la
+        API externa y devuelve el beneficiario resuelto y sus promociones.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codigo]
+              properties:
+                codigo: { type: string, example: "12345672", minLength: 3, maxLength: 64 }
+      responses:
+        "200":
+          description: Promociones resueltas
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LookupResult" }
+              examples:
+                ok: { externalValue: "./mocks/lookup.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: Código no encontrado en el proveedor
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: CODE_NOT_FOUND, message: "El código no corresponde a ningún beneficio." }
+        "502":
+          description: Proveedor externo no disponible
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: PROVIDER_UNAVAILABLE, message: "Servicio de promociones no disponible. Reintentá." }
+
+  /promotions/{promocionId}/reserve:
+    post:
+      tags: [promotions]
+      summary: Reservar una promoción por 24h (crea el cupón)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: promocionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [beneficiarioId]
+              properties:
+                beneficiarioId: { type: string, example: "ben_1" }
+      responses:
+        "201":
+          description: Cupón reservado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Reserva" }
+              examples:
+                ok: { externalValue: "./mocks/reserve.json" }
+        "409":
+          description: Conflicto de reserva
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                already: { value: { error: ALREADY_RESERVED, message: "Ya tenés una reserva activa para esta promoción." } }
+                nouses:  { value: { error: NO_USES_LEFT, message: "No te quedan usos para esta promoción." } }
+        "410":
+          description: Promoción expirada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: PROMOTION_EXPIRED, message: "La promoción venció." }
+        "423":
+          description: Sin stock
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: OUT_OF_STOCK, message: "No quedan cupos disponibles." }
+
+  # ─────────────────────────── CUPÓN / ESTADO ────────────────────────────────
+  /coupons/{cuponId}:
+    get:
+      tags: [coupons]
+      summary: Estado del cupón / reserva (countdown 24h)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cuponId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Estado del cupón
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CuponEstado" }
+              examples:
+                ok: { externalValue: "./mocks/coupon-state.json" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /coupons/{cuponId}/cancel:
+    post:
+      tags: [coupons]
+      summary: Cancelar reserva (invalida QR/NFC anterior)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cuponId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Cancelado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CuponEstado" }
+              example: { cuponId: cup_123, estado: CANCELADO }
+
+  /coupons:
+    get:
+      tags: [coupons]
+      summary: Historial de canjes/reservas por fecha (P-B05)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: estado, in: query, schema: { $ref: "#/components/schemas/EstadoCupon" } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, default: 10, maximum: 50 } }
+      responses:
+        "200":
+          description: Página de historial
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/CuponEstado" } }
+                  page: { type: integer }
+                  total: { type: integer }
+
+  # ─────────────────────────── CANJE (repartidor) ────────────────────────────
+  /coupons/redeem:
+    post:
+      tags: [redeem]
+      summary: Canjear cupón (app de repartidores existente). Atómico e idempotente.
+      security: [{ integrationToken: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mecanismo, repartidorId]
+              properties:
+                codigoAlfanumerico: { type: string, example: "RG4F8A2K" }
+                qrPayload: { type: string, description: "JWS del QR (alternativa al código)" }
+                nfcPayload: { type: string }
+                mecanismo: { $ref: "#/components/schemas/Mecanismo" }
+                repartidorId: { type: string, example: "rep_402" }
+                vehiculoId: { type: string, example: "veh_12" }
+                geo:
+                  type: object
+                  properties: { lat: { type: number }, lng: { type: number } }
+      responses:
+        "200":
+          description: Canje aprobado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CanjeResult" }
+              examples:
+                ok: { externalValue: "./mocks/redeem.json" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Código no encontrado
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" }, example: { error: COUPON_NOT_FOUND, message: "Código no encontrado." } } }
+        "409":
+          description: Cupón no canjeable
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" }, example: { error: COUPON_ALREADY_REDEEMED, message: "El cupón ya fue canjeado." } } }
+        "410":
+          description: Reserva vencida / cupón expirado
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" }, example: { error: RESERVATION_EXPIRED, message: "La reserva venció." } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ─────────────────────────────── ADMIN ─────────────────────────────────────
+  /admin/convenios:
+    get:
+      tags: [admin]
+      summary: Listar convenios
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Convenio" } } } } }
+    post:
+      tags: [admin]
+      summary: Crear convenio
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ConvenioInput" } } }
+      responses:
+        "201": { description: Creado, content: { application/json: { schema: { $ref: "#/components/schemas/Convenio" } } } }
+  /admin/convenios/{convenioId}/promociones:
+    post:
+      tags: [admin]
+      summary: Crear promoción dentro de un convenio
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: convenioId, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PromocionInput" } } }
+      responses:
+        "201": { description: Creada, content: { application/json: { schema: { $ref: "#/components/schemas/Promocion" } } } }
+  /admin/reports/summary:
+    get:
+      tags: [admin]
+      summary: KPIs (emitidos, reservados, canjeados, expirados, agotados)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: convenioId, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Totales
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservados: { type: integer }
+                  canjeados: { type: integer }
+                  expirados: { type: integer }
+                  cancelados: { type: integer }
+                  agotados: { type: integer }
+
+  # ──────────────────── API EXTERNA (contrato a implementar) ──────────────────
+  /external-resolve:
+    post:
+      tags: [external]
+      summary: "[EXTERNA] Resolver código → beneficiario + promociones. (server: provider)"
+      description: >
+        Contrato que el proveedor debe implementar. El backend de la PWA lo consume
+        desde PromotionsProvider (mock|http). NO lo expone la PWA.
+      security: [{ integrationToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codigo]
+              properties:
+                codigo: { type: string }
+      responses:
+        "200":
+          description: Beneficiario + promociones (fuente de verdad)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExternalResolveResult" }
+              examples:
+                ok: { externalValue: "./mocks/external-resolve.json" }
+        "404": { description: Código inexistente, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT, description: "JWT de sesión Auth.js (role en claims)" }
+    integrationToken: { type: http, scheme: bearer, description: "Token de integración del sistema de repartidores / proveedor" }
+
+  responses:
+    BadRequest: { description: Request inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unauthorized: { description: No autenticado/autorizado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    NotFound: { description: No encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    RateLimited: { description: Rate limit excedido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: CODE_NOT_FOUND }
+        message: { type: string }
+        meta: { type: object, additionalProperties: true }
+
+    Usuario:
+      type: object
+      properties:
+        id: { type: string, example: usr_1 }
+        email: { type: string, format: email }
+        nombre: { type: string, nullable: true }
+        telefono: { type: string, example: "+59899123456" }
+        role: { type: string, enum: [BENEFICIARIO, ADMIN] }
+        telefonoCompleto: { type: boolean, description: "false hasta completar onboarding" }
+
+    EstadoPromo: { type: string, enum: [AVAILABLE, UNAVAILABLE, USED] }
+    EstadoCupon: { type: string, enum: [RESERVADO, CANJEADO, EXPIRADO, CANCELADO] }
+    Mecanismo: { type: string, enum: [QR, CODIGO, NFC] }
+    CodigoTipo: { type: string, enum: [CI, FUNCIONARIO, KEY_SMS, DESCONOCIDO] }
+
+    PromocionDisponible:
+      type: object
+      properties:
+        promocionId: { type: string, example: promo_13kg }
+        convenio: { type: string, example: "Subsidio Junio 2026" }
+        nombre: { type: string, example: "Descuento garrafa 13kg" }
+        descripcion: { type: string, nullable: true }
+        estado: { $ref: "#/components/schemas/EstadoPromo" }
+        usosRestantes: { type: integer, example: 2 }
+        usosMax: { type: integer, example: 3 }
+        motivo: { type: string, nullable: true, description: "p.ej. OUT_OF_STOCK cuando UNAVAILABLE" }
+        vigenteHasta: { type: string, format: date-time }
+
+    LookupResult:
+      type: object
+      required: [beneficiario, promociones]
+      properties:
+        beneficiario:
+          type: object
+          properties:
+            id: { type: string, example: ben_1 }
+            codigoTipo: { $ref: "#/components/schemas/CodigoTipo" }
+            nombreExterno: { type: string, nullable: true }
+        promociones:
+          type: array
+          items: { $ref: "#/components/schemas/PromocionDisponible" }
+
+    Reserva:
+      type: object
+      properties:
+        cuponId: { type: string, example: cup_123 }
+        estado: { $ref: "#/components/schemas/EstadoCupon" }
+        codigoAlfanumerico: { type: string, example: RG4F8A2K, pattern: "^[A-Z0-9]{8}$" }
+        qrPayload: { type: string, description: "JWS para render del QR" }
+        nfcPayload: { type: string, description: "Texto NDEF (Web NFC)" }
+        reservedAt: { type: string, format: date-time }
+        reservationExpiresAt: { type: string, format: date-time }
+
+    CuponEstado:
+      type: object
+      properties:
+        cuponId: { type: string }
+        estado: { $ref: "#/components/schemas/EstadoCupon" }
+        promocion: { type: string }
+        codigoAlfanumerico: { type: string }
+        qrPayload: { type: string }
+        reservedAt: { type: string, format: date-time, nullable: true }
+        reservationExpiresAt: { type: string, format: date-time, nullable: true }
+        secondsRemaining: { type: integer, nullable: true }
+        canjeadoAt: { type: string, format: date-time, nullable: true }
+
+    CanjeResult:
+      type: object
+      properties:
+        transaccionId: { type: string, example: trx_789 }
+        cuponId: { type: string }
+        estado: { type: string, enum: [CANJEADO] }
+        estadoAnterior: { $ref: "#/components/schemas/EstadoCupon" }
+        canjeadoAt: { type: string, format: date-time }
+        aplicarDescuento: { type: boolean }
+        beneficiarioMasked: { type: string, example: "***567-2" }
+
+    Convenio:
+      type: object
+      properties:
+        id: { type: string }
+        nombre: { type: string }
+        partner: { type: string, nullable: true }
+        vigenteDesde: { type: string, format: date-time }
+        vigenteHasta: { type: string, format: date-time }
+        estado: { type: string, enum: [ACTIVO, PAUSADO, FINALIZADO] }
+    ConvenioInput:
+      type: object
+      required: [nombre, vigenteDesde, vigenteHasta]
+      properties:
+        nombre: { type: string }
+        partner: { type: string }
+        vigenteDesde: { type: string, format: date-time }
+        vigenteHasta: { type: string, format: date-time }
+
+    Promocion:
+      type: object
+      properties:
+        id: { type: string }
+        convenioId: { type: string }
+        nombre: { type: string }
+        producto: { type: string }
+        beneficio: { type: string }
+        maxUsos: { type: integer }
+        stockGlobal: { type: integer, nullable: true }
+        vigenteDesde: { type: string, format: date-time }
+        vigenteHasta: { type: string, format: date-time }
+        estado: { type: string, enum: [ACTIVA, PAUSADA, FINALIZADA] }
+    PromocionInput:
+      type: object
+      required: [nombre, producto, beneficio, maxUsos, vigenteDesde, vigenteHasta]
+      properties:
+        nombre: { type: string }
+        descripcion: { type: string }
+        producto: { type: string }
+        beneficio: { type: string }
+        maxUsos: { type: integer, default: 1 }
+        stockGlobal: { type: integer, nullable: true }
+        vigenteDesde: { type: string, format: date-time }
+        vigenteHasta: { type: string, format: date-time }
+
+    ExternalResolveResult:
+      type: object
+      description: "Respuesta de la API externa (fuente de verdad de entitlement)"
+      properties:
+        beneficiarioRef: { type: string, example: ext_ben_88291 }
+        codigoTipo: { $ref: "#/components/schemas/CodigoTipo" }
+        nombre: { type: string, nullable: true }
+        promociones:
+          type: array
+          items:
+            type: object
+            properties:
+              promocionRef: { type: string }
+              nombre: { type: string }
+              usosRestantes: { type: integer }
+              usosMax: { type: integer }
+              stockDisponible: { type: boolean }
+              vigenteHasta: { type: string, format: date-time }

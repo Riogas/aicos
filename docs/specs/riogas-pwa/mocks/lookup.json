@@ -1,0 +1,42 @@
+{
+  "beneficiario": {
+    "id": "ben_1",
+    "codigoTipo": "CI",
+    "nombreExterno": "Juan Pérez"
+  },
+  "promociones": [
+    {
+      "promocionId": "promo_13kg",
+      "convenio": "Subsidio Junio 2026",
+      "nombre": "Descuento garrafa 13kg",
+      "descripcion": "Beneficio supergás para garrafa de 13kg",
+      "estado": "AVAILABLE",
+      "usosRestantes": 2,
+      "usosMax": 3,
+      "motivo": null,
+      "vigenteHasta": "2026-06-30T23:59:59Z"
+    },
+    {
+      "promocionId": "promo_3kg",
+      "convenio": "Subsidio Junio 2026",
+      "nombre": "Garrafa 3kg",
+      "descripcion": "Beneficio para garrafa portátil 3kg",
+      "estado": "USED",
+      "usosRestantes": 0,
+      "usosMax": 1,
+      "motivo": null,
+      "vigenteHasta": "2026-06-30T23:59:59Z"
+    },
+    {
+      "promocionId": "promo_supergas_45",
+      "convenio": "Convenio Funcionarios",
+      "nombre": "Supergás 45kg",
+      "descripcion": "Recarga de supergás 45kg",
+      "estado": "UNAVAILABLE",
+      "usosRestantes": 1,
+      "usosMax": 1,
+      "motivo": "OUT_OF_STOCK",
+      "vigenteHasta": "2026-07-15T23:59:59Z"
+    }
+  ]
+}

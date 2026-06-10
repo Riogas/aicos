@@ -1,0 +1,9 @@
+{
+  "cuponId": "cup_123",
+  "estado": "RESERVADO",
+  "codigoAlfanumerico": "RG4F8A2K",
+  "qrPayload": "eyJhbGciOiJFUzI1NiIsImtpZCI6InJpb2dhcy0xIn0.eyJjdXBvbklkIjoiY3VwXzEyMyIsImp0aSI6IjAxSFpYWFhYWFhYWFhYWCJ9.SIGNATURE_PLACEHOLDER",
+  "nfcPayload": "RG4F8A2K",
+  "reservedAt": "2026-06-10T13:00:00Z",
+  "reservationExpiresAt": "2026-06-11T13:00:00Z"
+}
