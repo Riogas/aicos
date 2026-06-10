@@ -413,6 +413,67 @@ export async function createSubtaskTree(
   return { created, warnings };
 }
 
+/**
+ * Background heartbeats keep orchestrator parents alive — they post a brief
+ * comment every PARENT_HEARTBEAT_MS so Paperclip's watchdog doesn't escalate
+ * them to "blocked" while the children are still working.
+ *
+ * Stops itself when:
+ *   - the parent issue transitions to done/cancelled (the reconciler closes it), or
+ *   - HEARTBEAT_MAX_ITERATIONS ticks elapse (safety cap so we never leak).
+ *
+ * Module-level singletons so a tracker survives across orchestrate() calls.
+ */
+const PARENT_HEARTBEAT_MS = 60_000;
+const HEARTBEAT_MAX_ITERATIONS = 60; // 1 hour max
+const heartbeats = new Map<string, NodeJS.Timeout>();
+
+function startParentHeartbeat(parentIssueId: string, pcClient: PaperclipClient): void {
+  if (heartbeats.has(parentIssueId)) return;
+  let iterations = 0;
+  const tick = async () => {
+    iterations++;
+    if (iterations >= HEARTBEAT_MAX_ITERATIONS) {
+      stopParentHeartbeat(parentIssueId);
+      return;
+    }
+    try {
+      const issue = await pcClient.getIssue(parentIssueId);
+      const status = issue.status as string | undefined;
+      if (status === "done" || status === "cancelled") {
+        stopParentHeartbeat(parentIssueId);
+        return;
+      }
+      // Best-effort: post a short tracking comment. If we can't, we'll try
+      // again next tick — and if the watchdog fires anyway, the reconciler's
+      // 403 path logs cleanly.
+      await pcClient
+        .postComment(
+          parentIssueId,
+          `_(orchestrator tracking — children still in flight, iter ${iterations})_`,
+        )
+        .catch(() => {});
+    } catch {
+      // Issue gone or transient error — keep trying until iterations cap.
+    }
+  };
+  const handle = setInterval(() => void tick(), PARENT_HEARTBEAT_MS);
+  heartbeats.set(parentIssueId, handle);
+}
+
+function stopParentHeartbeat(parentIssueId: string): void {
+  const h = heartbeats.get(parentIssueId);
+  if (h) {
+    clearInterval(h);
+    heartbeats.delete(parentIssueId);
+  }
+}
+
+/** Exposed for the promoter's reconciler — it knows when a parent really closed. */
+export function clearParentHeartbeat(parentIssueId: string): void {
+  stopParentHeartbeat(parentIssueId);
+}
+
 export async function orchestrate(input: OrchestrateInput, pcClient: PaperclipClient): Promise<OrchestrateResult & { parentIssueId?: string; parentIdentifier?: string | null }> {
   const { decomp, warnings: dwarns } = await decompose(input.taskDescription, input.defaultRole ?? FALLBACK_ROLE);
 
@@ -445,6 +506,11 @@ export async function orchestrate(input: OrchestrateInput, pcClient: PaperclipCl
         });
         effectiveParentId = parent.id;
         parentIdentifier = (parent.identifier as string | undefined) ?? null;
+        // Keep the parent alive while the pipeline runs — without this it
+        // gets escalated to 'blocked' after ~5min of no agent activity and
+        // becomes a pain to close (the watchdog stamps a recovery action
+        // owned by an admin account the bridge can't speak for).
+        startParentHeartbeat(parent.id, pcClient);
       } catch (e) {
         autoCreateWarnings.push(`auto-create parent failed: ${(e as Error).message}`);
       }

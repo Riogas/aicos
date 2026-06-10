@@ -45,6 +45,7 @@ import {
 } from "./registry.js";
 import { createQuotaClient } from "./quota-client.js";
 import { createLearningClient } from "./learning-client.js";
+import { createPolicyClient } from "./policy-client.js";
 
 interface PaperclipIssueListItem {
   id: string;
@@ -231,6 +232,7 @@ export async function runPaperclipProcessMode(): Promise<number> {
   // Same clients as the HTTP server uses
   const quotaClient = createQuotaClient(process.env.QUOTA_SERVICE_URL);
   const learningClient = createLearningClient(process.env.LEARNING_SERVICE_URL);
+  const policyClient = createPolicyClient(process.env.POLICY_SERVICE_URL);
 
   // Bridge HTTP tracker isn't reachable from inside this subprocess (different
   // address space), so we wire executeRun with a lightweight tracker shim that
@@ -256,6 +258,7 @@ export async function runPaperclipProcessMode(): Promise<number> {
     paperclip: { client: pcClient, issueId: issue.id },
     quotaClient,
     learningClient,
+    policyClient,
     tracker: remoteTracker,
     runId: effectiveRunId,
   });

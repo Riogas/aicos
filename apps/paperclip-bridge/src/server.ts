@@ -11,6 +11,7 @@ import {
 import type { ProjectWorkspace } from "./registry.js";
 import { createQuotaClient } from "./quota-client.js";
 import { createLearningClient } from "./learning-client.js";
+import { createPolicyClient } from "./policy-client.js";
 import {
   storeMemory,
   retrieveFromScope,
@@ -40,6 +41,7 @@ export interface ServerOptions {
   paperclipApiKey?: string;
   quotaServiceUrl?: string;
   learningServiceUrl?: string;
+  policyServiceUrl?: string;
   /**
    * Company id used by the subtask promoter loop and the /orchestrate endpoint.
    * Defaults to env AICOS_COMPANY_ID; if neither is set, /orchestrate is disabled
@@ -68,6 +70,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
 
   const quotaClient = createQuotaClient(opts.quotaServiceUrl);
   const learningClient = createLearningClient(opts.learningServiceUrl);
+  const policyClient = createPolicyClient(opts.policyServiceUrl);
 
   // ─── In-flight run tracking (for live dashboard heartbeat) ───────────────
   // Stage-aware tracker shared between the HTTP /run path (in-process emit) and
@@ -216,6 +219,109 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     triggeredBy: z.enum(["telegram", "paperclip", "manual"]).optional(),
     parentTitle: z.string().optional(),
     parentAssigneeAgentId: z.string().optional(),
+  });
+
+  // ─── Telegram webhook ────────────────────────────────────────────────────
+  // Accepts either:
+  //   - The official Telegram Bot API update object (when set as the bot's
+  //     webhook URL via BotFather), or
+  //   - A simplified shape from external relays (n8n, custom bot wrapper):
+  //       { message: string, chatId?: string|number, userId?: string,
+  //         projectId?: string, taskDescription?: string }
+  //
+  // Auth: optional. If AICOS_TELEGRAM_SECRET env is set, requests must
+  // present it as either `x-telegram-bot-api-secret-token` header (Telegram's
+  // own header) or `x-aicos-secret` (for non-Telegram relays).
+  //
+  // Each accepted message kicks off /orchestrate with triggeredBy=telegram.
+  // The default project is AICOS_DEFAULT_PROJECT_ID env or the orchestrate
+  // body's projectId.
+  const DEFAULT_PROJECT_ID = process.env.AICOS_DEFAULT_PROJECT_ID;
+  const TELEGRAM_SECRET = process.env.AICOS_TELEGRAM_SECRET;
+
+  const TelegramWebhookSchema = z.union([
+    // Official Telegram Bot API shape (subset we care about)
+    z.object({
+      update_id: z.number(),
+      message: z.object({
+        text: z.string().min(1),
+        chat: z.object({ id: z.number() }),
+        from: z.object({ id: z.number(), username: z.string().optional() }).optional(),
+      }),
+    }),
+    // Relay-style shape
+    z.object({
+      message: z.string().min(1),
+      chatId: z.union([z.string(), z.number()]).optional(),
+      userId: z.string().optional(),
+      projectId: z.string().optional(),
+    }),
+  ]);
+
+  app.post("/telegram/webhook", async (req, reply) => {
+    if (!orchestrateAvailable) {
+      return reply.code(503).send({ error: "orchestrator disabled — set AICOS_COMPANY_ID + paperclip creds" });
+    }
+    if (TELEGRAM_SECRET) {
+      const headerSecret =
+        (req.headers["x-telegram-bot-api-secret-token"] as string | undefined) ??
+        (req.headers["x-aicos-secret"] as string | undefined);
+      if (headerSecret !== TELEGRAM_SECRET) {
+        return reply.code(401).send({ error: "missing or wrong shared secret" });
+      }
+    }
+    const parsed = TelegramWebhookSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid webhook payload", details: parsed.error.flatten() });
+    }
+
+    // Normalize both shapes into the same fields.
+    let message: string;
+    let projectId: string | undefined;
+    if ("update_id" in parsed.data) {
+      message = parsed.data.message.text;
+    } else {
+      message = parsed.data.message;
+      projectId = parsed.data.projectId;
+    }
+    const effectiveProjectId = projectId ?? DEFAULT_PROJECT_ID;
+    if (!effectiveProjectId) {
+      return reply.code(400).send({
+        error: "no projectId — set AICOS_DEFAULT_PROJECT_ID env or include projectId in payload",
+      });
+    }
+
+    const input: OrchestrateInput = {
+      taskDescription: message,
+      companyId: companyId!,
+      projectId: effectiveProjectId,
+      triggeredBy: "telegram",
+    };
+    const client = new PaperclipClient({
+      apiUrl: opts.paperclipApiUrl!,
+      apiKey: opts.paperclipApiKey!,
+    });
+    try {
+      const result = await orchestrate(input, client);
+      app.log.info(
+        { subtasks: result.createdIssues.length, parent: result.parentIdentifier },
+        "telegram-triggered orchestrate completed",
+      );
+      // Telegram requires fast 200 response — return short summary.
+      return reply.code(202).send({
+        status: "accepted",
+        parentIdentifier: result.parentIdentifier,
+        subtaskCount: result.createdIssues.length,
+        subtasks: result.createdIssues.map((c) => ({
+          identifier: c.identifier,
+          role: c.role,
+          blockedByPlanIds: c.blockedByPlanIds,
+        })),
+      });
+    } catch (e) {
+      app.log.error({ err: (e as Error).message }, "telegram orchestrate failed");
+      return reply.code(500).send({ error: "orchestrate failed", details: (e as Error).message });
+    }
   });
 
   app.post("/orchestrate", async (req, reply) => {
@@ -470,6 +576,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
                 : undefined,
             quotaClient,
             learningClient,
+            policyClient,
             tracker,
             runId: flightKey,
           });

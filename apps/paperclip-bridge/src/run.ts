@@ -14,6 +14,7 @@ import type { QuotaClient } from "./quota-client.js";
 import { buildCandidates, inferProvider } from "./provider-map.js";
 import type { LearningClient } from "./learning-client.js";
 import type { InFlightTracker } from "./in-flight-tracker.js";
+import type { PolicyClient } from "./policy-client.js";
 
 interface CommitResult {
   attempted: boolean;
@@ -155,6 +156,8 @@ export interface ExecuteRunInput {
   tracker?: InFlightTracker;
   /** Key used by the tracker to identify this run. Defaults to nothing (no stage events). */
   runId?: string;
+  /** Optional policy engine client. If present and decision=deny, the run aborts before any CLI spawn. */
+  policyClient?: PolicyClient;
 }
 
 export interface ExecuteRunResult {
@@ -255,6 +258,48 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   let costUsd = 0;
   let tokens: { input?: number; output?: number; cached?: number } | undefined;
   let attemptCount = 0;
+
+  // Policy gate: ask the engine to evaluate the run BEFORE we spawn any CLI.
+  // Fail-open if no client is configured. A deny result skips the entire
+  // direct-cli path and the run completes with exitCode=2.
+  if (input.policyClient?.isEnabled() && input.persona) {
+    const verdict = await input.policyClient.evaluate({
+      actor: {
+        type: "agent",
+        id: input.persona.registryId,
+        registryId: input.persona.registryId,
+        department: input.persona.department,
+      },
+      action: "execute-run",
+      resource: pc?.issueId
+        ? {
+            type: "ticket",
+            id: pc.issueId,
+            ticketIdentifier: input.ticketIdentifier,
+            projectId: input.workspace?.projectName,
+            workspaceCwd: input.workspace?.cwd,
+          }
+        : undefined,
+      bucket: input.task as never,
+    });
+    if (verdict.decision === "deny") {
+      process.stderr.write(
+        `[policy] DENY ${input.persona.registryId} action=execute-run reason=${verdict.reason ?? "n/a"} rule=${verdict.matchedRule ?? "?"}\n`,
+      );
+      const durationMs = Date.now() - start;
+      return {
+        exitCode: 2,
+        output: `**Policy denied:** ${verdict.reason ?? "no reason given"}${verdict.matchedRule ? ` (rule: ${verdict.matchedRule})` : ""}`,
+        durationMs,
+        mode: "direct-cli",
+      };
+    }
+    if (verdict.decision === "require_approval") {
+      process.stderr.write(
+        `[policy] HOLD ${input.persona.registryId} reason=${verdict.reason ?? "n/a"} — proceeding (approval workflow not yet wired)\n`,
+      );
+    }
+  }
 
   if (input.persona && candidates.length > 0) {
     const baseDirectPrompt = buildDirectCliPrompt({

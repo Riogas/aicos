@@ -92,6 +92,7 @@ async function main(): Promise<number> {
       paperclipApiKey: process.env.PAPERCLIP_API_KEY,
       quotaServiceUrl: process.env.QUOTA_SERVICE_URL,
       learningServiceUrl: process.env.LEARNING_SERVICE_URL,
+      policyServiceUrl: process.env.POLICY_SERVICE_URL,
     });
     app.log.info(
       {

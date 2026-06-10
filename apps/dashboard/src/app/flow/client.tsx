@@ -161,7 +161,13 @@ export function FlowViewer() {
 
   useEffect(() => {
     let stopped = false;
+
+    // Pull the heavy aggregated snapshot from /api/flow-state. SSE only tells
+    // us "something changed in the tracker" — quota, learning, tree, etc.
+    // still come from this poll. So we keep polling but slow it down when SSE
+    // is connected (5s instead of 2s).
     const tick = async () => {
+      if (stopped) return;
       try {
         const r = await fetch("/api/flow-state", { cache: "no-store" });
         if (!r.ok) return;
@@ -171,11 +177,56 @@ export function FlowViewer() {
         /* noop */
       }
     };
-    tick();
-    const id = setInterval(tick, 2000);
+
+    let pollMs = 2000;
+    let pollId: ReturnType<typeof setInterval> | null = null;
+    const startPolling = () => {
+      tick();
+      if (pollId) clearInterval(pollId);
+      pollId = setInterval(tick, pollMs);
+    };
+    startPolling();
+
+    // EventSource fast-path: when a tracker event arrives, fire an immediate
+    // tick so the visual update doesn't wait for the next poll boundary.
+    // Cap one fast-tick per 750 ms so a burst of stage events doesn't hammer
+    // the API.
+    let lastFastTickAt = 0;
+    let es: EventSource | null = null;
+    const setupSSE = () => {
+      try {
+        es = new EventSource("/api/flow-events");
+        es.onopen = () => {
+          // Drop polling to a slow heartbeat once SSE is live.
+          pollMs = 5000;
+          startPolling();
+        };
+        const onAnyEvent = () => {
+          const t = Date.now();
+          if (t - lastFastTickAt < 750) return;
+          lastFastTickAt = t;
+          void tick();
+        };
+        es.addEventListener("start", onAnyEvent);
+        es.addEventListener("stage", onAnyEvent);
+        es.addEventListener("update", onAnyEvent);
+        es.addEventListener("end", onAnyEvent);
+        es.addEventListener("snapshot", onAnyEvent);
+        es.onerror = () => {
+          // Fall back to the 2s polling rate; EventSource will auto-reconnect.
+          pollMs = 2000;
+          startPolling();
+        };
+      } catch {
+        // Browser doesn't support EventSource — polling carries on.
+      }
+    };
+    setupSSE();
+
     return () => {
       stopped = true;
-      clearInterval(id);
+      if (pollId) clearInterval(pollId);
+      es?.close();
     };
   }, []);
 

@@ -27,6 +27,7 @@
  */
 
 import { PaperclipClient } from "./paperclip-client.js";
+import { clearParentHeartbeat } from "./orchestrator.js";
 
 const PROMOTE_INTERVAL_MS = 5_000;
 const PROMOTE_QUERY_TIMEOUT_MS = 4_000;
@@ -276,6 +277,7 @@ async function reconcileParents(
     try {
       await client.patchStatus(p.id, "done");
       closed.push(p.identifier ?? p.id);
+      clearParentHeartbeat(p.id);
       process.stderr.write(
         `[parent-reconcile] closed parent ${p.identifier ?? p.id} (all ${children.length} children done)\n`,
       );
