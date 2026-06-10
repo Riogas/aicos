@@ -33,6 +33,37 @@ export async function startServer(opts: ServerOpts): Promise<FastifyInstance> {
 
   app.get("/audit/recent", async () => ({ items: await audit.recent(50) }));
 
+  // POST /audit/log — generic audit-record endpoint. Used by the bridge's
+  // orchestrator to log synthetic actions (e.g. "decomposed task into 4
+  // subtasks") so the dashboard's Tool Gateway node lights up on real
+  // orchestration activity, not just direct tool calls.
+  app.post("/audit/log", async (req, reply) => {
+    const body = req.body as
+      | {
+          tool?: string;
+          action?: string;
+          actor?: { id?: string; registryId?: string };
+          decision?: string;
+          reason?: string;
+          params?: Record<string, unknown>;
+        }
+      | undefined;
+    if (!body?.action) {
+      reply.code(400);
+      return { error: "missing action" };
+    }
+    await audit.record({
+      ts: new Date().toISOString(),
+      tool: body.tool ?? "synthetic",
+      action: body.action,
+      actor: { id: body.actor?.id ?? "?", registryId: body.actor?.registryId },
+      decision: (body.decision ?? "allow") as AuditEntry["decision"],
+      reason: body.reason,
+      params: body.params,
+    });
+    return { ok: true };
+  });
+
   // Generic policy + audit wrapper for tool actions
   async function runTool<I>(
     tool: string,

@@ -30,6 +30,9 @@ import {
   getPaperclipAgentIdForRegistryId,
 } from "./registry.js";
 import { PaperclipClient } from "./paperclip-client.js";
+import { createGatewayClient } from "./gateway-client.js";
+
+const gatewayClient = createGatewayClient(process.env.GATEWAY_SERVICE_URL);
 
 export interface SubtaskPlan {
   /** local id within the plan, e.g. "s1", "s2" — used only for dependsOn wiring */
@@ -475,6 +478,18 @@ export function clearParentHeartbeat(parentIssueId: string): void {
 }
 
 export async function orchestrate(input: OrchestrateInput, pcClient: PaperclipClient): Promise<OrchestrateResult & { parentIssueId?: string; parentIdentifier?: string | null }> {
+  // Audit synthetic action so the dashboard's Tool Gateway lights up.
+  void gatewayClient.logAudit({
+    tool: "orchestrator",
+    action: "decompose",
+    actor: { id: "orchestrator" },
+    params: {
+      taskDescription: input.taskDescription.slice(0, 200),
+      projectId: input.projectId,
+      triggeredBy: input.triggeredBy,
+    },
+  });
+
   const { decomp, warnings: dwarns } = await decompose(input.taskDescription, input.defaultRole ?? FALLBACK_ROLE);
 
   // Auto-create a root parent if caller didn't provide one, so the dashboard
@@ -524,6 +539,19 @@ export async function orchestrate(input: OrchestrateInput, pcClient: PaperclipCl
     decomp,
     pcClient,
   );
+
+  // Audit the final tree.
+  void gatewayClient.logAudit({
+    tool: "orchestrator",
+    action: "subtasks-created",
+    actor: { id: "orchestrator" },
+    params: {
+      parentIdentifier: parentIdentifier ?? null,
+      subtaskCount: created.length,
+      atomic: decomp.atomic,
+    },
+  });
+
   return {
     decomposition: decomp,
     createdIssues: created,

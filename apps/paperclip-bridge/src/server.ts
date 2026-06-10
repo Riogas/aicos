@@ -221,6 +221,209 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     parentAssigneeAgentId: z.string().optional(),
   });
 
+  // ─── Cancel endpoint ─────────────────────────────────────────────────────
+  // DELETE /run/:runId — mark a tracker run as done, post a cancellation
+  // comment to its ticket, and PATCH the ticket to status='cancelled'. The
+  // actual subprocess (when in process-mode) keeps running until it
+  // notices the ticket status — there's no cross-process kill signal — but
+  // its work won't land anywhere useful because the ticket is already
+  // closed. For HTTP-mode runs there's nothing to kill either; the
+  // setImmediate continues but its final updateStatus will lose to ours.
+  app.delete<{ Params: { runId: string }; Querystring: { reason?: string } }>(
+    "/run/:runId",
+    async (req, reply) => {
+      const runId = req.params.runId;
+      const reason = (req.query.reason ?? "cancelled by user").slice(0, 200);
+      const run = tracker.get(runId);
+      tracker.setStage(runId, "done");
+
+      // Try to look up the ticket and close it.
+      let issueId: string | null = null;
+      if (run?.ticketIdentifier && paperclipReady && companyId) {
+        try {
+          const r = await fetch(
+            `${opts.paperclipApiUrl!}/api/companies/${companyId}/issues?identifier=${encodeURIComponent(run.ticketIdentifier)}`,
+            { headers: { Authorization: `Bearer ${opts.paperclipApiKey!}` } },
+          );
+          if (r.ok) {
+            const data = (await r.json()) as { items?: Array<{ id: string }> } | Array<{ id: string }>;
+            const items = Array.isArray(data) ? data : data.items ?? [];
+            if (items[0]) issueId = items[0].id;
+          }
+        } catch {
+          // best-effort
+        }
+      }
+      if (issueId && paperclipReady) {
+        const client = new PaperclipClient({
+          apiUrl: opts.paperclipApiUrl!,
+          apiKey: opts.paperclipApiKey!,
+        });
+        try {
+          await client.postComment(issueId, `**🛑 Cancelled:** ${reason}`);
+        } catch {
+          // best-effort
+        }
+        try {
+          // Paperclip has no 'cancelled' transition for some statuses; fall back to blocked.
+          await fetch(`${opts.paperclipApiUrl!}/api/issues/${issueId}`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${opts.paperclipApiKey!}`,
+            },
+            body: JSON.stringify({ status: "cancelled" }),
+          });
+        } catch {
+          // best-effort
+        }
+      }
+      return reply.code(200).send({
+        ok: true,
+        runId,
+        issueId,
+        reason,
+        knownRun: Boolean(run),
+      });
+    },
+  );
+
+  // ─── Approve endpoint ────────────────────────────────────────────────────
+  // POST /approve { issueId | runId, approverNote? }
+  // Re-launches a previously held run with approved=true so the policy gate
+  // is skipped. Looks up the persona from the issue's assignee, re-fetches
+  // prompt context from the ticket title+description, and pushes through.
+  const ApproveSchema = z
+    .object({
+      issueId: z.string().optional(),
+      runId: z.string().optional(),
+      approverNote: z.string().optional(),
+    })
+    .refine((v) => v.issueId || v.runId, { message: "either issueId or runId required" });
+
+  app.post("/approve", async (req, reply) => {
+    const parsed = ApproveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid request", details: parsed.error.flatten() });
+    }
+    if (!paperclipReady) {
+      return reply.code(503).send({ error: "paperclip not configured" });
+    }
+    // We need an issueId to know which ticket to relaunch. If only runId
+    // was provided, look it up from the tracker.
+    let issueId = parsed.data.issueId;
+    if (!issueId && parsed.data.runId) {
+      const run = tracker.get(parsed.data.runId);
+      if (run?.ticketIdentifier) {
+        // Tracker only knows the identifier (RIO-X), not the UUID. Resolve via
+        // Paperclip's issues list filtered by identifier (cheap because we
+        // already restrict by company).
+        try {
+          const r = await fetch(
+            `${opts.paperclipApiUrl!}/api/companies/${companyId}/issues?identifier=${encodeURIComponent(run.ticketIdentifier)}`,
+            { headers: { Authorization: `Bearer ${opts.paperclipApiKey!}` } },
+          );
+          if (r.ok) {
+            const data = (await r.json()) as { items?: Array<{ id: string }> } | Array<{ id: string }>;
+            const items = Array.isArray(data) ? data : data.items ?? [];
+            if (items[0]) issueId = items[0].id;
+          }
+        } catch {
+          // fall through
+        }
+      }
+    }
+    if (!issueId) {
+      return reply.code(404).send({ error: "issue not found for that runId — pass issueId directly" });
+    }
+
+    const client = new PaperclipClient({
+      apiUrl: opts.paperclipApiUrl!,
+      apiKey: opts.paperclipApiKey!,
+    });
+
+    // Fetch the issue + figure out persona from assignee.
+    let issue;
+    try {
+      issue = await client.getIssue(issueId);
+    } catch (e) {
+      return reply.code(404).send({ error: "getIssue failed", details: (e as Error).message });
+    }
+    const assigneeAgentId = (issue as { assigneeAgentId?: string }).assigneeAgentId;
+    if (!assigneeAgentId) {
+      return reply.code(400).send({ error: "issue has no assigneeAgentId — cannot resolve persona" });
+    }
+    const { resolvePersonaByPaperclipId, resolveWorkspaceByProjectId } = await import("./registry.js");
+    const persona = resolvePersonaByPaperclipId(assigneeAgentId);
+    if (!persona) {
+      return reply.code(404).send({ error: `no persona for assigneeAgentId=${assigneeAgentId}` });
+    }
+    const projectId = (issue as { projectId?: string }).projectId;
+    const workspace = projectId ? resolveWorkspaceByProjectId(projectId) : null;
+    const ticketIdentifier = (issue as { identifier?: string }).identifier;
+    const title = (issue as { title?: string }).title ?? "";
+    const description = (issue as { description?: string }).description ?? "";
+    const prompt = `${title}\n\n${description}`.trim();
+
+    // Post the approver note to the ticket if provided.
+    if (parsed.data.approverNote) {
+      try {
+        await client.postComment(
+          issueId,
+          `**✅ Approved:** ${parsed.data.approverNote}`,
+        );
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Unblock the ticket if it was sitting at "blocked" with our awaiting-approval marker.
+    try {
+      await client.updateStatus(issueId, "in_progress");
+    } catch (e) {
+      process.stderr.write(`[approve] updateStatus warn: ${(e as Error).message}\n`);
+    }
+
+    // Spawn the run with approved=true.
+    const flightKey = parsed.data.runId || `approved-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    tracker.start({
+      runId: flightKey,
+      persona: persona.registryId,
+      personaName: persona.agentName,
+      cli: persona.preferredModel?.cli,
+      model: persona.preferredModel?.model,
+      ticketIdentifier,
+    });
+    setImmediate(async () => {
+      try {
+        await executeRun({
+          prompt,
+          persona,
+          workspace,
+          ticketIdentifier,
+          paperclip: { client, issueId: issueId! },
+          quotaClient,
+          learningClient,
+          policyClient,
+          tracker,
+          runId: flightKey,
+          approved: true,
+        });
+      } catch (e) {
+        app.log.error({ err: (e as Error).message, issueId, runId: flightKey }, "approved run failed");
+      } finally {
+        tracker.setStage(flightKey, "done");
+      }
+    });
+
+    return reply.code(202).send({
+      status: "approved-and-relaunched",
+      issueId,
+      runId: flightKey,
+      persona: persona.registryId,
+    });
+  });
+
   // ─── Telegram webhook ────────────────────────────────────────────────────
   // Accepts either:
   //   - The official Telegram Bot API update object (when set as the bot's
