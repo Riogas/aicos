@@ -53,6 +53,8 @@ export interface InFlightRun {
   model?: string;
   ticketIdentifier?: string;
   startedAt: string;
+  /** Last time ANY event touched this run — used by the stale-run reaper. */
+  lastActivityAt: string;
   stage: RunStage;
   stageHistory: Array<{ stage: RunStage; at: string }>;
   /** Ring buffer of recent output chunks (for snapshot replay to fresh clients). */
@@ -75,6 +77,13 @@ const OUTPUT_BUFFER_MAX = 60;
 
 /** Keep done runs visible briefly so SSE clients see the transition before removal. */
 const DONE_TTL_MS = 5_000;
+/**
+ * Runs that haven't had ANY event in this long are reaped — they're zombies
+ * from a killed/crashed process that never sent a "done". Without this they
+ * linger forever and make the dashboard look like phantom parallel runs.
+ */
+const STALE_RUN_MS = 10 * 60 * 1000;
+const REAP_INTERVAL_MS = 60_000;
 /** Redis key prefix + TTL for persisted runs. Long enough to survive a bridge crash. */
 const REDIS_KEY_PREFIX = "aicos:tracker:run:";
 const REDIS_TTL_S = 3600; // 1h — runs older than this are stale anyway
@@ -89,12 +98,37 @@ export class InFlightTracker extends EventEmitter {
   private timers = new Map<string, NodeJS.Timeout>();
   private redis?: Redis;
 
+  private reaper?: NodeJS.Timeout;
+
   constructor(opts: TrackerOptions = {}) {
     super();
     this.redis = opts.redis;
     if (this.redis) {
       // Restore any runs that were active when we crashed.
       void this.restoreFromRedis();
+    }
+    // Reap zombie runs (killed processes that never sent "done").
+    this.reaper = setInterval(() => this.reapStale(), REAP_INTERVAL_MS);
+    this.reaper.unref?.();
+  }
+
+  /** Drop runs with no activity for STALE_RUN_MS that never reached "done". */
+  private reapStale(): void {
+    const now = Date.now();
+    for (const [runId, run] of this.runs) {
+      if (run.stage === "done") continue;
+      const last = Date.parse(run.lastActivityAt || run.startedAt);
+      if (Number.isFinite(last) && now - last > STALE_RUN_MS) {
+        this.runs.delete(runId);
+        const t = this.timers.get(runId);
+        if (t) {
+          clearTimeout(t);
+          this.timers.delete(runId);
+        }
+        void this.forget(runId);
+        this.emit("event", { type: "end", runId, at: new Date().toISOString(), run });
+        process.stderr.write(`[tracker] reaped stale run ${runId} (${run.ticketIdentifier ?? "?"})\n`);
+      }
     }
   }
 
@@ -168,6 +202,7 @@ export class InFlightTracker extends EventEmitter {
     const run: InFlightRun = {
       ...init,
       startedAt: at,
+      lastActivityAt: at,
       stage: "dispatched",
       stageHistory: [{ stage: "dispatched", at }],
     };
@@ -185,6 +220,7 @@ export class InFlightTracker extends EventEmitter {
       const synthetic: InFlightRun = {
         runId,
         startedAt: at,
+        lastActivityAt: at,
         stage,
         stageHistory: [{ stage, at }],
         ...extra,
@@ -193,6 +229,7 @@ export class InFlightTracker extends EventEmitter {
       this.emit("event", { type: "start", runId, at, run: synthetic });
       return;
     }
+    existing.lastActivityAt = at;
     if (existing.stage === stage && !extra) return; // dedup no-ops
     existing.stage = stage;
     existing.stageHistory.push({ stage, at });
@@ -228,6 +265,7 @@ export class InFlightTracker extends EventEmitter {
       run = {
         runId,
         startedAt: at,
+        lastActivityAt: at,
         stage: "cli-running",
         stageHistory: [{ stage: "cli-running", at }],
         ...meta,
@@ -235,6 +273,7 @@ export class InFlightTracker extends EventEmitter {
       this.runs.set(runId, run);
       this.emit("event", { type: "start", runId, at, run });
     }
+    run.lastActivityAt = at;
     run.outputSeq = (run.outputSeq ?? 0) + 1;
     const oc: OutputChunk = {
       seq: run.outputSeq,
@@ -275,5 +314,9 @@ export class InFlightTracker extends EventEmitter {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     this.runs.clear();
+    if (this.reaper) {
+      clearInterval(this.reaper);
+      this.reaper = undefined;
+    }
   }
 }

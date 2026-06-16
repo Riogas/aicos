@@ -61,23 +61,42 @@ export async function GET(req: Request) {
   const comments: PcComment[] = Array.isArray(raw) ? raw : (raw?.comments ?? []);
 
   const norm = comments.map((c) => ({
-    body: c.body ?? "",
+    body: (c.body ?? "").trim(),
     authorAgentId: c.authorAgentId ?? c.author_agent_id ?? null,
     createdAt: c.createdAt ?? c.created_at ?? "",
     isAgent: Boolean(c.authorAgentId ?? c.author_agent_id),
   }));
 
-  // El "resultado final" = el comentario de agente más reciente que NO es un
-  // mensaje de sistema/recovery de Paperclip.
-  const agentComments = norm
-    .filter((c) => c.isAgent && !/^Paperclip automatically/i.test(c.body))
-    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  // Stubs de Paperclip/sistema que NO son el informe del agente (aunque a veces
+  // se postean con el agentId como autor, p.ej. "Agent completed successfully.").
+  const STUBS = [
+    /^Paperclip automatically/i,
+    /^Paperclip needs a disposition/i,
+    /^Agent completed successfully\.?$/i,
+    /^Agent run failed/i,
+  ];
+  const isStub = (b: string) => STUBS.some((re) => re.test(b));
+
+  // El informe REAL del bridge: tiene contenido sustancial (tabla de archivos,
+  // resumen) o los marcadores del bridge (tag de persona / auto-commit).
+  const reportMarkers = /(via direct-cli|via hermes|Auto-commit|Archivos creados|Ejecucion fallo|Resumen:)/i;
+  const candidates = norm.filter((c) => c.body.length > 0 && !isStub(c.body));
+
+  // Preferencia: marcador de bridge → si no, el más largo (el informe real es
+  // largo). Desempate por más reciente.
+  candidates.sort((a, b) => {
+    const am = reportMarkers.test(a.body) ? 1 : 0;
+    const bm = reportMarkers.test(b.body) ? 1 : 0;
+    if (am !== bm) return bm - am;
+    if (b.body.length !== a.body.length) return b.body.length - a.body.length;
+    return (b.createdAt || "").localeCompare(a.createdAt || "");
+  });
 
   return NextResponse.json({
     ok: true,
     ticket,
     issue: { id: issue.id, title: issue.title ?? null, status: issue.status ?? null },
-    result: agentComments[0]?.body ?? null,
-    comments: agentComments.slice(0, 5),
+    result: candidates[0]?.body ?? null,
+    comments: candidates.slice(0, 5).map((c) => ({ body: c.body, createdAt: c.createdAt })),
   });
 }
