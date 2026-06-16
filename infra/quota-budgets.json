@@ -1,0 +1,21 @@
+{
+  "_comment": "AICOS Quota Manager budgets — guardrails LOCALES (no son el contador real de Anthropic/OpenAI). Subidos MUY alto a propósito para que el sistema nunca rutee fuera de claude por un falso 'sin quota'. El límite real de Max-Plan (ventana 5h) lo maneja Anthropic y no es visible acá. Editá y recreá el container aicos-quota-manager para aplicar.",
+  "criticalProvider": "anthropic",
+  "survivalModels": [
+    { "cli": "opencode", "model": "moonshotai/kimi-k2.6", "provider": "moonshot" },
+    { "cli": "opencode", "model": "deepseek/deepseek-v4-flash-free", "provider": "opencode-free" }
+  ],
+  "providers": {
+    "anthropic": { "windowSec": 3600, "maxCostUsd": 500.0, "maxRequests": 100000 },
+    "openai": { "windowSec": 3600, "maxCostUsd": 200.0, "maxRequests": 50000 },
+    "google": { "windowSec": 3600, "maxCostUsd": 200.0, "maxRequests": 50000 },
+    "moonshot": { "windowSec": 3600, "maxCostUsd": 100.0 },
+    "xiaomi": { "windowSec": 3600, "maxCostUsd": 100.0 },
+    "opencode-free": { "windowSec": 3600, "maxRequests": 100000 }
+  },
+  "clis": {
+    "claude-code": { "windowSec": 18000, "maxRequests": 100000, "session": "max-plan" },
+    "codex": { "windowSec": 3600, "maxRequests": 50000, "session": "chatgpt-pro" },
+    "antigravity": { "windowSec": 3600, "maxRequests": 50000, "session": "google-preview" }
+  }
+}

@@ -77,7 +77,7 @@ services:
     extra_hosts:
       - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/paperclip
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/paperclip
       PORT: "3100"
       HOST: 0.0.0.0
       SERVE_UI: "true"
@@ -124,16 +124,22 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://host.docker.internal:6379
       QUOTA_PORT: "7001"
       QUOTA_ENABLED: "true"
       LOG_LEVEL: info
       # L7 smart routing: cuando learning esta disponible, /select re-rankea
       # candidates por score historico antes de aplicar availability.
       SMART_ROUTING: "true"
-      LEARNING_SERVICE_URL: http://aicos-learning:7003
-      # QUOTA_BUDGETS_FILE: /etc/aicos/budgets.json   # optional override
+      LEARNING_SERVICE_URL: http://host.docker.internal:7003
+      # Budgets LOCALES (guardrail). Subidos muy alto en infra/quota-budgets.json
+      # para no rutear fuera de claude por un falso "sin quota".
+      QUOTA_BUDGETS_FILE: /etc/aicos/budgets.json
+    volumes:
+      - ./quota-budgets.json:/etc/aicos/budgets.json:ro
     ports:
       - "7001:7001"
     healthcheck:
@@ -174,11 +180,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://host.docker.internal:6379
       GATEWAY_PORT: "7004"
       GATEWAY_ENABLED: "true"
-      POLICY_SERVICE_URL: http://aicos-policy-engine:7002
+      POLICY_SERVICE_URL: http://host.docker.internal:7002
       LOG_LEVEL: info
       # GITHUB_TOKEN: from .env (optional, enables real POSTs to github)
     ports:
@@ -200,8 +208,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:${AICOS_DOCKER_GATEWAY:-172.28.0.1}"
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://host.docker.internal:6379
       LEARNING_PORT: "7003"
       LEARNING_ENABLED: "true"
       LOG_LEVEL: info
@@ -228,16 +238,19 @@ services:
     environment:
       # Dentro de la red infra_default los servicios se resuelven por DNS;
       # el bridge corre en el HOST (no en docker) → host.docker.internal.
-      QUOTA_SERVICE_URL: http://aicos-quota-manager:7001
-      POLICY_SERVICE_URL: http://aicos-policy-engine:7002
-      LEARNING_SERVICE_URL: http://aicos-learning:7003
-      GATEWAY_SERVICE_URL: http://aicos-tool-gateway:7004
+      # NOTA WSL2: la red bridge container-a-container esta rota, asi que
+      # ruteamos TODO por host.docker.internal (gateway 172.28.0.1) que llega
+      # a los puertos mapeados en el host.
+      QUOTA_SERVICE_URL: http://host.docker.internal:7001
+      POLICY_SERVICE_URL: http://host.docker.internal:7002
+      LEARNING_SERVICE_URL: http://host.docker.internal:7003
+      GATEWAY_SERVICE_URL: http://host.docker.internal:7004
       BRIDGE_SERVICE_URL: http://host.docker.internal:7100
       # /api/flow-state asks Paperclip directly for in_progress issues so the
       # multi-agent tree + concurrent worker view reflects what's really happening
       # (the bridge's HTTP-only in-flight tracker misses runs spawned via the
       # process adapter).
-      PAPERCLIP_API_URL: http://aicos-paperclip:3100
+      PAPERCLIP_API_URL: http://host.docker.internal:3100
       PAPERCLIP_API_KEY: ${PAPERCLIP_API_KEY}
       AICOS_COMPANY_ID: ${AICOS_COMPANY_ID}
       AICOS_HERMES_AGENT_ID: ${AICOS_HERMES_AGENT_ID}

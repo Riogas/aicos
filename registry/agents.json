@@ -101,10 +101,14 @@
       "capabilities": "Writes code per spec+plan. Edits files, runs builds, fixes type errors.",
       "systemPrompt": "Sos el implementador IT. Recibis spec+plan y los ejecutas: editas archivos, ejecutas builds/tests, fixeas errores. NUNCA tomas decisiones de arquitectura, eso ya esta resuelto por el architect.",
       "preferredModel": {
-        "cli": "codex",
-        "model": "gpt-5.5"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
+        {
+          "cli": "codex",
+          "model": "gpt-5.5"
+        },
         {
           "cli": "agy",
           "model": "gemini-3"
@@ -114,12 +118,8 @@
           "model": "moonshotai/kimi-k2.6"
         },
         {
-          "cli": "opencode",
-          "model": "xiaomi/mimo-vl-7b-rl"
-        },
-        {
-          "cli": "claude",
-          "model": "claude-sonnet-4-6"
+          "cli": "hermes",
+          "model": "anthropic/claude-sonnet-4-6"
         }
       ],
       "paperclipAgentId": "847bc676-51ac-419a-989f-7611505bb888"
