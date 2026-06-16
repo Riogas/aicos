@@ -36,12 +36,16 @@
  * this mode does NOT trigger the watchdog "missing disposition" escalation.
  */
 
+import { mkdirSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import { executeRun } from "./run.js";
 import { PaperclipClient } from "./paperclip-client.js";
 import {
   loadRegistry,
   resolvePersonaByPaperclipId,
   resolveWorkspaceByProjectId,
+  resolveWorkspace,
 } from "./registry.js";
 import { createQuotaClient } from "./quota-client.js";
 import { createLearningClient } from "./learning-client.js";
@@ -134,6 +138,32 @@ async function fetchAssignedIssues(
   }
 }
 
+/**
+ * Fetch a project's display name (for the greenfield workspace convention).
+ * Returns null on any error — caller degrades to "no workspace".
+ */
+async function fetchProjectName(
+  apiUrl: string,
+  apiKey: string,
+  projectId: string,
+): Promise<string | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${apiUrl}/api/projects/${projectId}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) return null;
+    const data = (await r.json()) as { name?: string; project?: { name?: string } };
+    return data.name ?? data.project?.name ?? null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function pickIssue(items: PaperclipIssueListItem[]): Promise<PaperclipIssueListItem | null> {
   if (items.length === 0) return null;
   // Strict: only in_progress (we narrowed the query to that). If somehow
@@ -214,8 +244,34 @@ export async function runPaperclipProcessMode(): Promise<number> {
     ticketIdentifier: issue.identifier ?? undefined,
   });
 
-  // Build workspace from project_id mapping (registry/project-workspaces.json)
-  const workspace = issue.projectId ? resolveWorkspaceByProjectId(issue.projectId) : null;
+  // Build workspace from project_id mapping (registry/project-workspaces.json).
+  // If the project isn't mapped, apply the GREENFIELD CONVENTION: fetch its
+  // name and default the cwd to ~/Projects/<slug>, creating the dir so the
+  // agent's `cd` lands. Mapped projects are unchanged.
+  let workspace = issue.projectId ? resolveWorkspaceByProjectId(issue.projectId) : null;
+  if (!workspace && issue.projectId) {
+    const projectName = await fetchProjectName(apiUrl, apiKey, issue.projectId);
+    workspace = resolveWorkspace(issue.projectId, projectName);
+    if (workspace) {
+      try {
+        mkdirSync(workspace.cwd, { recursive: true });
+        // git-init best-effort so auto-commit funciona desde el primer run.
+        if (!existsSync(join(workspace.cwd, ".git"))) {
+          execFileSync("git", ["init", "-b", workspace.defaultBranch], {
+            cwd: workspace.cwd,
+            stdio: "ignore",
+          });
+        }
+      } catch (e) {
+        process.stderr.write(
+          `[process-mode] greenfield cwd ${workspace.cwd} setup warn: ${(e as Error).message}\n`,
+        );
+      }
+      process.stderr.write(
+        `[process-mode] greenfield workspace ${workspace.cwd} (proyecto "${projectName}")\n`,
+      );
+    }
+  }
 
   // Construct prompt — Paperclip already auto-marked status to in_progress when
   // dispatching, so we directly read the issue and execute.

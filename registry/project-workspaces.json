@@ -1,0 +1,22 @@
+{
+  "$schema": "AICOS Project Workspaces map v0.1",
+  "comments": [
+    "Mapa projectId (Paperclip) -> workspace cwd local donde los agentes escriben codigo.",
+    "El bridge usa este mapa cuando Paperclip no inyecta paperclipWorkspace.cwd en el context.",
+    "Para agregar un proyecto: anotar id Paperclip + path local + (opcional) git remote."
+  ],
+  "workspaces": {
+    "12acfb22-9921-4463-a439-f9bb6fd412a8": {
+      "projectName": "riogas-pwa",
+      "cwd": "/home/jgomez/Projects/riogas-pwa",
+      "gitRemote": null,
+      "defaultBranch": "main"
+    },
+    "6a136301-b721-4d51-97ad-bb2b53f542c1": {
+      "projectName": "SGM Rebuild",
+      "cwd": "/home/jgomez/Projects/sgm-rebuild",
+      "gitRemote": null,
+      "defaultBranch": "main"
+    }
+  }
+}

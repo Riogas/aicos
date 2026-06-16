@@ -146,6 +146,57 @@ export function resolveWorkspaceByProjectId(
   return cachedWorkspaces?.[projectId] ?? null;
 }
 
+/**
+ * Slugify a project name into a filesystem-safe directory leaf.
+ * "SGM Rebuild" -> "sgm-rebuild", "RíoGas PWA!" -> "riogas-pwa".
+ */
+export function slugifyProjectName(name: string): string {
+  const slug = name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // strip accents (combining diacritics)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return slug || "project";
+}
+
+/**
+ * GREENFIELD CONVENTION (regla del usuario): un proyecto SIN mapping explícito
+ * en project-workspaces.json se resuelve automáticamente a
+ * `~/Projects/<slug-del-nombre-del-proyecto>`. Así un proyecto nuevo arranca
+ * con casa propia sin tener que mapearlo a mano primero.
+ *
+ * Devuelve null si no hay nombre de proyecto (no podemos inventar un path).
+ */
+export function defaultGreenfieldWorkspace(
+  projectName: string | null | undefined,
+): ProjectWorkspace | null {
+  if (!projectName || !projectName.trim()) return null;
+  return {
+    projectName,
+    cwd: join(homedir(), "Projects", slugifyProjectName(projectName)),
+    gitRemote: null,
+    defaultBranch: "main",
+  };
+}
+
+/**
+ * Resolución de workspace con fallback greenfield. Prioridad:
+ *   1) mapping explícito por projectId (project-workspaces.json)
+ *   2) convención greenfield ~/Projects/<slug> si tenemos projectName
+ *   3) null (el agente trabaja en el cwd actual)
+ */
+export function resolveWorkspace(
+  projectId: string | null | undefined,
+  projectName?: string | null,
+): ProjectWorkspace | null {
+  if (projectId && cachedWorkspaces?.[projectId]) {
+    return cachedWorkspaces[projectId];
+  }
+  return defaultGreenfieldWorkspace(projectName);
+}
+
 export function resolvePersonaByPaperclipId(
   paperclipAgentId: string,
 ): PersonaResolution | null {
