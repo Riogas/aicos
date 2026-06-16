@@ -35,6 +35,7 @@ import urllib.request
 from pathlib import Path
 
 from .ui import ok, warn, info, err, prompt_text
+from .services_setup import write_infra_env
 
 PAPERCLIP_URL = "http://localhost:3100"
 CHALLENGE_TIMEOUT_S = 15 * 60
@@ -271,6 +272,11 @@ def _onboard_specialists(state: dict, token: str, company_id: str, repo: Path) -
 def configure(state: dict) -> dict:
     repo = Path(state["repo"])
     claim_path = repo / ".secrets" / "paperclip-claim-response.json"
+
+    # CRÍTICO: escribir infra/.env ANTES de levantar el stack. Si no, postgres
+    # arranca sin POSTGRES_PASSWORD y se niega a inicializar → unhealthy. La
+    # fase services lo re-escribe luego con la API key / company id ya conocidos.
+    write_infra_env(state, repo)
 
     if not _paperclip_up():
         _bring_paperclip_up(repo)

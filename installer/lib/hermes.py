@@ -150,7 +150,10 @@ def configure(state: dict) -> dict:
 
     # "oauth" = valor legacy de un wizard-state viejo → tratarlo como hermes-setup.
     if auth_mode in ("hermes-setup", "oauth"):
-        _run_hermes_setup()
+        if state.get("hermes_setup_done"):
+            ok("hermes ya configurado (hermes setup ya corrió). Reconfigurá con: hermes setup")
+        elif _run_hermes_setup():
+            state["hermes_setup_done"] = True
     elif auth_mode == "api-key":
         info("Provide an API key per provider you want Hermes to use. Empty = skip.")
         api_keys = state.setdefault("hermes_api_keys", {})
