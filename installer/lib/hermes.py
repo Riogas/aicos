@@ -46,11 +46,18 @@ HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
 
 def _install_hermes() -> bool:
     """Official installer: clones hermes-agent into ~/.hermes/hermes-agent,
-    creates its venv, and drops the `hermes` wrapper in ~/.local/bin."""
-    info(f"Installing Hermes Agent ({HERMES_INSTALL_URL})…")
+    creates its venv, and drops the `hermes` wrapper in ~/.local/bin.
+
+    --skip-setup: NO lanza el setup wizard interactivo de Hermes (que pide
+    loguear al Nous Portal). El cerebro de Hermes lo configuramos nosotros
+    con API keys más abajo (o el usuario lo hace después). --skip-browser:
+    no instala Playwright/Chromium (pesado; el bridge no usa el browser-tool).
+    --non-interactive: cualquier prompt restante usa defaults sin colgarse."""
+    info(f"Installing Hermes Agent ({HERMES_INSTALL_URL}) — sin wizard interactivo…")
     try:
         subprocess.run(
-            ["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash"],
+            ["bash", "-c",
+             f"curl -fsSL {HERMES_INSTALL_URL} | bash -s -- --skip-setup --non-interactive"],
             check=True,
         )
         return _find_hermes_python() is not None
