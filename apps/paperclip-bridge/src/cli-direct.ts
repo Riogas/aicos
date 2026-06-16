@@ -2,12 +2,23 @@ import { spawn } from "node:child_process";
 
 export type SupportedCli = "claude" | "codex" | "agy" | "opencode" | "hermes";
 
+/** A live chunk of agent output streamed while the CLI runs. */
+export interface StreamChunk {
+  kind: "text" | "tool" | "thinking";
+  text: string;
+}
+
 export interface CliInvocationOptions {
   cli: SupportedCli;
   model?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Called for each parsed output chunk as the CLI streams it (claude/codex/
+   * opencode emit NDJSON events). Best-effort live view — never blocks the run.
+   */
+  onChunk?: (chunk: StreamChunk) => void;
 }
 
 export interface CliInvocationResult {
@@ -25,17 +36,38 @@ export interface CliInvocationResult {
   tokens?: { input?: number; output?: number; cached?: number };
 }
 
+/**
+ * Mapea el nombre de modelo del registry al id/alias que entiende `claude --model`.
+ * El CLI acepta alias de familia ("sonnet"/"opus"/"haiku") y resuelve al ultimo
+ * de esa familia — mas robusto que pasar un id exacto que puede no existir.
+ */
+function claudeModelAlias(model: string | undefined): string | null {
+  if (!model) return null;
+  const m = model.toLowerCase();
+  if (m.includes("opus")) return "opus";
+  if (m.includes("sonnet")) return "sonnet";
+  if (m.includes("haiku")) return "haiku";
+  return null; // desconocido → dejar que claude use su default
+}
+
 function buildArgs(opts: CliInvocationOptions): string[] {
   switch (opts.cli) {
-    case "claude":
-      // --output-format json: single JSON object al final con {result, total_cost_usd, usage}
-      return [
+    case "claude": {
+      // --output-format stream-json: NDJSON, un event por linea (system/assistant/
+      // user/result). Permite streamear el output en vivo Y el ultimo event
+      // `result` trae {result, total_cost_usd, usage}. Requiere --verbose en -p.
+      const args = [
         "-p",
         opts.prompt,
         "--dangerously-skip-permissions",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
       ];
+      const alias = claudeModelAlias(opts.model);
+      if (alias) args.push("--model", alias);
+      return args;
+    }
     case "codex": {
       // -s workspace-write: permite editar archivos en el cwd sin pedir aprobacion.
       // --json: JSONL events stream (cada event en una linea)
@@ -103,24 +135,105 @@ function parseOutput(
   }
 }
 
+function briefToolInput(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const o = input as Record<string, unknown>;
+  const pick = o.command ?? o.file_path ?? o.path ?? o.pattern ?? o.url ?? o.description;
+  if (typeof pick === "string") return pick.slice(0, 100);
+  return JSON.stringify(o).slice(0, 90);
+}
+
 /**
- * Claude `--output-format json`: emite UN solo JSON object con:
- *   { type: "result", subtype: "success", result: "...text...",
- *     total_cost_usd: 0.034, usage: { input_tokens, output_tokens, cache_*: ... } }
+ * Extrae chunks de output en vivo de UNA linea NDJSON, por CLI. Devuelve []
+ * si la linea no aporta texto/tool visible. Tolerante a basura (no-JSON → []).
+ */
+export function extractStreamChunks(cli: SupportedCli, line: string): StreamChunk[] {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed[0] !== "{") return [];
+  let ev: Record<string, unknown>;
+  try {
+    ev = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  const out: StreamChunk[] = [];
+  if (cli === "claude") {
+    // assistant event: message.content = [{type:text|thinking|tool_use, ...}]
+    if (ev.type === "assistant") {
+      const msg = ev.message as { content?: unknown[] } | undefined;
+      for (const p of msg?.content ?? []) {
+        const part = p as Record<string, unknown>;
+        if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+          out.push({ kind: "text", text: part.text });
+        } else if (part.type === "thinking" && typeof part.thinking === "string") {
+          out.push({ kind: "thinking", text: part.thinking });
+        } else if (part.type === "tool_use") {
+          out.push({ kind: "tool", text: `${String(part.name ?? "tool")} ${briefToolInput(part.input)}`.trim() });
+        }
+      }
+    }
+  } else if (cli === "codex") {
+    const msg = (ev.msg as Record<string, unknown>) ?? ev;
+    const type = (ev.type as string) ?? (msg.type as string) ?? "";
+    if (type === "agent_message") {
+      const t = (msg.message as string) ?? (ev.message as string) ?? "";
+      if (t.trim()) out.push({ kind: "text", text: t });
+    } else if (type === "agent_reasoning") {
+      const t = (msg.text as string) ?? (ev.text as string) ?? "";
+      if (t.trim()) out.push({ kind: "thinking", text: t });
+    } else if (type === "exec_command_begin" || type === "tool_call") {
+      const cmd = (msg.command as string) ?? JSON.stringify(msg).slice(0, 100);
+      out.push({ kind: "tool", text: String(cmd) });
+    }
+  } else if (cli === "opencode") {
+    if ((ev.type === "text" || ev.type === "assistant" || ev.type === "message") &&
+        (ev.text || ev.content)) {
+      const t = (ev.text as string) ?? (ev.content as string) ?? "";
+      if (t.trim()) out.push({ kind: "text", text: t });
+    }
+  }
+  return out;
+}
+
+/**
+ * Claude `--output-format stream-json`: NDJSON. El ultimo event `result` trae
+ *   { type:"result", subtype:"success", result:"...text...",
+ *     total_cost_usd: 0.034, usage:{input_tokens, output_tokens, cache_*} }
+ * Backward-compat: si recibe el formato viejo (UN solo objeto json) tambien lo
+ * parsea.
  */
 function parseClaudeJson(
   stdout: string,
 ): Pick<CliInvocationResult, "parsedText" | "costUsd" | "tokens"> {
   const trimmed = stdout.trim();
-  // Claude --output-format json emite UN objeto JSON. Puede haber prelude
-  // (logs, etc.) antes — buscamos el primer "{" y parseamos desde ahi al final.
-  const jsonStart = trimmed.indexOf("{");
-  const candidate = jsonStart >= 0 ? trimmed.slice(jsonStart) : trimmed;
-  const obj = JSON.parse(candidate) as {
+  type ResultObj = {
+    type?: string;
     result?: string;
     total_cost_usd?: number;
     usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
   };
+  let obj: ResultObj | null = null;
+  // stream-json: buscar la linea con type==="result" (de atras hacia adelante).
+  const lines = trimmed.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("{"));
+  if (lines.length > 1) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const o = JSON.parse(lines[i]) as ResultObj;
+        if (o && o.type === "result") {
+          obj = o;
+          break;
+        }
+      } catch {
+        /* skip malformed line */
+      }
+    }
+  }
+  // Fallback: formato json clasico (UN objeto, posible prelude antes del primer "{").
+  if (!obj) {
+    const jsonStart = trimmed.indexOf("{");
+    const candidate = jsonStart >= 0 ? trimmed.slice(jsonStart) : trimmed;
+    obj = JSON.parse(candidate) as ResultObj;
+  }
   return {
     parsedText: obj.result?.trim() ?? undefined,
     costUsd: typeof obj.total_cost_usd === "number" ? obj.total_cost_usd : undefined,
@@ -235,9 +348,26 @@ export function invokeCli(opts: CliInvocationOptions): Promise<CliInvocationResu
 
     let stdout = "";
     let stderr = "";
+    let lineBuf = ""; // para emitir chunks por linea NDJSON en vivo
 
     proc.stdout.on("data", (c: Buffer) => {
-      stdout += c.toString("utf-8");
+      const s = c.toString("utf-8");
+      stdout += s;
+      if (!opts.onChunk) return;
+      // Stream live: parsear cada linea completa apenas llega.
+      lineBuf += s;
+      let nl: number;
+      while ((nl = lineBuf.indexOf("\n")) >= 0) {
+        const line = lineBuf.slice(0, nl);
+        lineBuf = lineBuf.slice(nl + 1);
+        for (const chunk of extractStreamChunks(opts.cli, line)) {
+          try {
+            opts.onChunk(chunk);
+          } catch {
+            /* el live view nunca rompe el run */
+          }
+        }
+      }
     });
     proc.stderr.on("data", (c: Buffer) => {
       stderr += c.toString("utf-8");

@@ -156,6 +156,8 @@ export interface ExecuteRunInput {
   tracker?: InFlightTracker;
   /** Key used by the tracker to identify this run. Defaults to nothing (no stage events). */
   runId?: string;
+  /** Live output stream callback — invoked per CLI output chunk for the dashboard uplink. */
+  onOutput?: (chunk: { kind: "text" | "tool" | "thinking"; text: string }) => void;
   /** Optional policy engine client. If present and decision=deny, the run aborts before any CLI spawn. */
   policyClient?: PolicyClient;
   /**
@@ -421,6 +423,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         model: chosen.model,
         prompt: directPrompt,
         cwd: input.workspace?.cwd,
+        onChunk: input.onOutput,
       });
       const attemptDuration = Date.now() - t0;
 

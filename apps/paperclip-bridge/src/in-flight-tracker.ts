@@ -37,6 +37,14 @@ export const STAGE_ORDER: RunStage[] = [
   "done",
 ];
 
+/** One streamed chunk of agent output (live uplink). */
+export interface OutputChunk {
+  seq: number;
+  kind: "text" | "tool" | "thinking";
+  text: string;
+  at: string;
+}
+
 export interface InFlightRun {
   runId: string;
   persona?: string;
@@ -47,14 +55,23 @@ export interface InFlightRun {
   startedAt: string;
   stage: RunStage;
   stageHistory: Array<{ stage: RunStage; at: string }>;
+  /** Ring buffer of recent output chunks (for snapshot replay to fresh clients). */
+  outputBuffer?: OutputChunk[];
+  /** Monotonic output counter. */
+  outputSeq?: number;
 }
 
 export interface TrackerEvent {
-  type: "start" | "stage" | "update" | "end";
+  type: "start" | "stage" | "update" | "end" | "output";
   runId: string;
   at: string;
   run: InFlightRun;
+  /** Present only for type==="output". */
+  output?: OutputChunk;
 }
+
+/** How many recent output chunks to keep per run for snapshot replay. */
+const OUTPUT_BUFFER_MAX = 60;
 
 /** Keep done runs visible briefly so SSE clients see the transition before removal. */
 const DONE_TTL_MS = 5_000;
@@ -193,6 +210,43 @@ export class InFlightTracker extends EventEmitter {
       }, DONE_TTL_MS);
       this.timers.set(runId, t);
     }
+  }
+
+  /**
+   * Append a live output chunk and broadcast it. Lightweight: NOT persisted to
+   * Redis (too chatty) — only kept in-memory in a small ring buffer for replay.
+   * Synthesizes a run if the chunk arrives before any stage event.
+   */
+  appendOutput(
+    runId: string,
+    chunk: { kind: OutputChunk["kind"]; text: string },
+    meta?: { persona?: string; personaName?: string; ticketIdentifier?: string },
+  ): void {
+    let run = this.runs.get(runId);
+    const at = new Date().toISOString();
+    if (!run) {
+      run = {
+        runId,
+        startedAt: at,
+        stage: "cli-running",
+        stageHistory: [{ stage: "cli-running", at }],
+        ...meta,
+      };
+      this.runs.set(runId, run);
+      this.emit("event", { type: "start", runId, at, run });
+    }
+    run.outputSeq = (run.outputSeq ?? 0) + 1;
+    const oc: OutputChunk = {
+      seq: run.outputSeq,
+      kind: chunk.kind,
+      // cap per-chunk size so a giant tool result can't flood the SSE pipe
+      text: chunk.text.length > 4000 ? chunk.text.slice(0, 4000) + "…" : chunk.text,
+      at,
+    };
+    run.outputBuffer = run.outputBuffer ?? [];
+    run.outputBuffer.push(oc);
+    if (run.outputBuffer.length > OUTPUT_BUFFER_MAX) run.outputBuffer.shift();
+    this.emit("event", { type: "output", runId, at, run, output: oc });
   }
 
   update(runId: string, patch: Partial<InFlightRun>): void {

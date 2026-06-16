@@ -133,6 +133,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         tracker,
         runId: job.runId,
         approved: job.approved,
+        onOutput: (chunk) => tracker.appendOutput(job.runId, chunk),
       });
     } finally {
       tracker.setStage(job.runId, "done");
@@ -246,6 +247,27 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     }
     tracker.setStage(runId, stage as RunStage, rest);
     return { ok: true, stage, runId };
+  });
+
+  // POST /output — live agent output chunks from the process-mode subprocess
+  // (or the in-process /run path). Feeds the dashboard's AGENT UPLINK panel via
+  // the same SSE /events stream (event type "output").
+  const OutputEventSchema = z.object({
+    runId: z.string().min(1),
+    kind: z.enum(["text", "tool", "thinking"]),
+    text: z.string(),
+    persona: z.string().optional(),
+    personaName: z.string().optional(),
+    ticketIdentifier: z.string().optional(),
+  });
+  app.post("/output", async (req, reply) => {
+    const parsed = OutputEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "validation", details: parsed.error.flatten() });
+    }
+    const { runId, kind, text, ...meta } = parsed.data;
+    tracker.appendOutput(runId, { kind, text }, meta);
+    return { ok: true };
   });
 
   app.post("/admin/reload-registry", async () => {

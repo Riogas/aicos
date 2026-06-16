@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FlowEvent } from "./narration";
 
 /* ───────────────────────────────────────────────────────────────
@@ -164,6 +164,95 @@ export function ConsolePanel({ log }: { log: FlowEvent[] }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ───────────────────────────────────────────────────────────────
+   AGENT UPLINK — live streaming output of the active run (the agent's
+   actual text / tool calls as it works, via SSE "output" events).
+─────────────────────────────────────────────────────────────── */
+export interface UplinkChunk {
+  seq: number;
+  kind: "text" | "tool" | "thinking";
+  text: string;
+  at: string;
+}
+export interface UplinkRun {
+  runId: string;
+  persona?: string;
+  personaName?: string;
+  ticketIdentifier?: string;
+  chunks: UplinkChunk[];
+  lastAt: number;
+}
+
+export function AgentUplink({ runs }: { runs: UplinkRun[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Show the most-recently-active run.
+  const active = runs.length
+    ? runs.reduce((a, b) => (b.lastAt > a.lastAt ? b : a))
+    : null;
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [active?.chunks.length, active?.runId]);
+
+  if (!active) return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute bottom-16 right-12 z-20 w-[420px] border border-hud-dim bg-black/85 backdrop-blur-md"
+      style={{
+        clipPath: "polygon(14px 0, 100% 0, 100% 100%, 0 100%, 0 14px)",
+        boxShadow: "0 0 26px rgba(0,217,255,0.14)",
+      }}
+    >
+      <div className="flex items-center justify-between border-b border-hud-dim px-3 py-1.5">
+        <span className="font-mono text-[8.5px] uppercase tracking-[0.3em] text-hud glow-text">
+          ◢ AGENT UPLINK
+        </span>
+        <span className="truncate font-mono text-[8.5px] uppercase tracking-widest text-hud-dim">
+          {active.personaName ?? active.persona ?? "agent"}
+          {active.ticketIdentifier ? ` · ${active.ticketIdentifier}` : ""}
+          <span className="ml-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-hud align-middle"
+            style={{ boxShadow: "0 0 6px #00d9ff" }} />
+        </span>
+      </div>
+      <div ref={scrollRef} className="max-h-[260px] overflow-y-auto px-3 py-2">
+        {active.chunks.slice(-80).map((c) => (
+          <UplinkLine key={c.seq} chunk={c} />
+        ))}
+        {runs.length > 1 && (
+          <div className="mt-1 font-mono text-[8px] uppercase tracking-widest text-hud-dim opacity-50">
+            +{runs.length - 1} otro(s) agente(s) activo(s)
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UplinkLine({ chunk }: { chunk: UplinkChunk }) {
+  if (chunk.kind === "tool") {
+    return (
+      <div className="console-line my-0.5 font-mono text-[9px] leading-snug text-gold glow-text-gold">
+        <span className="opacity-70">▸ </span>
+        <span className="uppercase tracking-wide">{chunk.text}</span>
+      </div>
+    );
+  }
+  if (chunk.kind === "thinking") {
+    return (
+      <div className="console-line whitespace-pre-wrap font-mono text-[9px] italic leading-snug text-subtle opacity-70">
+        {chunk.text.length > 600 ? chunk.text.slice(0, 600) + "…" : chunk.text}
+      </div>
+    );
+  }
+  return (
+    <div className="console-line whitespace-pre-wrap font-mono text-[9.5px] leading-snug text-fg/90">
+      {chunk.text}
     </div>
   );
 }

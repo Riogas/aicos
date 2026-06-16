@@ -12,10 +12,18 @@ import {
   type EdgeTypes,
   MarkerType,
 } from "@xyflow/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NarrationFeed, useFlowEvents } from "@/components/flow/narration";
 import { BootSequence } from "@/components/flow/boot";
-import { StatusStrip, TickerTape, ConsolePanel, RunsSparkline } from "@/components/flow/hud-chrome";
+import {
+  StatusStrip,
+  TickerTape,
+  ConsolePanel,
+  RunsSparkline,
+  AgentUplink,
+  type UplinkRun,
+  type UplinkChunk,
+} from "@/components/flow/hud-chrome";
 import {
   OperatorNode,
   BrainNode,
@@ -161,6 +169,55 @@ const PROVIDERS = [
 export function FlowViewer() {
   const [state, setState] = useState<FlowState | null>(null);
 
+  // ── Live agent output (AGENT UPLINK) — fed by SSE "output" events ─────────
+  // Accumulate into a ref (synchronous, per-event) and flush to React state on
+  // a throttle so a burst of chunks doesn't trigger a render per chunk.
+  const [uplink, setUplink] = useState<Record<string, UplinkRun>>({});
+  const uplinkRef = useRef<Record<string, UplinkRun>>({});
+  const uplinkDirty = useRef(false);
+
+  useEffect(() => {
+    const flush = setInterval(() => {
+      const now = Date.now();
+      // Expire runs idle > 90s so the panel doesn't show stale output forever.
+      let changed = uplinkDirty.current;
+      for (const [id, r] of Object.entries(uplinkRef.current)) {
+        if (now - r.lastAt > 90_000) {
+          delete uplinkRef.current[id];
+          changed = true;
+        }
+      }
+      if (changed) {
+        uplinkDirty.current = false;
+        setUplink({ ...uplinkRef.current });
+      }
+    }, 250);
+    return () => clearInterval(flush);
+  }, []);
+
+  // Append a chunk (or seed from a snapshot buffer) into the uplink ref.
+  const ingestOutput = (
+    runId: string,
+    meta: { persona?: string; personaName?: string; ticketIdentifier?: string },
+    chunks: UplinkChunk[],
+  ) => {
+    if (!runId || chunks.length === 0) return;
+    const cur =
+      uplinkRef.current[runId] ??
+      ({ runId, chunks: [], lastAt: 0, ...meta } as UplinkRun);
+    cur.persona = meta.persona ?? cur.persona;
+    cur.personaName = meta.personaName ?? cur.personaName;
+    cur.ticketIdentifier = meta.ticketIdentifier ?? cur.ticketIdentifier;
+    // Dedup by seq (snapshot replay + live can overlap).
+    const seen = new Set(cur.chunks.map((c) => c.seq));
+    for (const ch of chunks) if (!seen.has(ch.seq)) cur.chunks.push(ch);
+    cur.chunks.sort((a, b) => a.seq - b.seq);
+    if (cur.chunks.length > 200) cur.chunks = cur.chunks.slice(-200);
+    cur.lastAt = Date.now();
+    uplinkRef.current[runId] = cur;
+    uplinkDirty.current = true;
+  };
+
   useEffect(() => {
     let stopped = false;
 
@@ -214,6 +271,42 @@ export function FlowViewer() {
         es.addEventListener("update", onAnyEvent);
         es.addEventListener("end", onAnyEvent);
         es.addEventListener("snapshot", onAnyEvent);
+
+        // Live agent output — feed the AGENT UPLINK panel (no re-poll needed).
+        es.addEventListener("output", (e: MessageEvent) => {
+          try {
+            const d = JSON.parse(e.data) as {
+              runId: string;
+              run?: { persona?: string; personaName?: string; ticketIdentifier?: string };
+              output?: UplinkChunk;
+            };
+            if (d.output) {
+              ingestOutput(d.runId, d.run ?? {}, [d.output]);
+            }
+          } catch {
+            /* ignore malformed */
+          }
+        });
+        // Snapshot replay on (re)connect — seed the panel with recent buffer.
+        es.addEventListener("snapshot", (e: MessageEvent) => {
+          try {
+            const d = JSON.parse(e.data) as {
+              run?: {
+                runId: string;
+                persona?: string;
+                personaName?: string;
+                ticketIdentifier?: string;
+                outputBuffer?: UplinkChunk[];
+              };
+            };
+            const run = d.run;
+            if (run?.outputBuffer?.length) {
+              ingestOutput(run.runId, run, run.outputBuffer);
+            }
+          } catch {
+            /* ignore */
+          }
+        });
         es.onerror = () => {
           // Fall back to the 2s polling rate; EventSource will auto-reconnect.
           pollMs = 2000;
@@ -281,6 +374,9 @@ export function FlowViewer() {
 
         {/* Persistent terminal log (bottom-left) */}
         <ConsolePanel log={log} />
+
+        {/* Live agent output stream (bottom-right) — lo que el agente escribe AHORA */}
+        <AgentUplink runs={Object.values(uplink)} />
 
         {/* Recent-runs ticker tape (bottom, stock-ticker style) */}
         <TickerTape recent={state?.recent ?? []} />

@@ -105,6 +105,36 @@ async function reportStage(
   }
 }
 
+const BRIDGE_OUTPUT_URL =
+  process.env.BRIDGE_OUTPUT_URL ?? "http://host.docker.internal:7100/output";
+
+/**
+ * Stream a live output chunk to the bridge HTTP server (→ SSE → dashboard
+ * AGENT UPLINK). Best-effort, fire-and-forget; never blocks/breaks the run.
+ */
+function reportOutput(payload: {
+  runId: string;
+  kind: "text" | "tool" | "thinking";
+  text: string;
+  persona?: string;
+  personaName?: string;
+  ticketIdentifier?: string;
+}): void {
+  if (!payload.runId) return;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 1500);
+  void fetch(BRIDGE_OUTPUT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: ctrl.signal,
+  })
+    .catch(() => {
+      /* missing uplink must not break the run */
+    })
+    .finally(() => clearTimeout(t));
+}
+
 async function fetchAssignedIssues(
   apiUrl: string,
   apiKey: string,
@@ -317,6 +347,15 @@ export async function runPaperclipProcessMode(): Promise<number> {
     policyClient,
     tracker: remoteTracker,
     runId: effectiveRunId,
+    onOutput: (chunk) =>
+      reportOutput({
+        runId: effectiveRunId,
+        kind: chunk.kind,
+        text: chunk.text,
+        persona: persona.registryId,
+        personaName: persona.agentName,
+        ticketIdentifier: issue.identifier ?? undefined,
+      }),
   });
 
   // Final transition — the bridge will keep the entry around for DONE_TTL_MS
