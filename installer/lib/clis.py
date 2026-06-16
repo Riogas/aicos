@@ -127,6 +127,32 @@ def configure(state: dict) -> dict:
 
     # Per-CLI: install + auth.
     auth_choices = state.setdefault("cli_auth", {})
+
+    # ── Profile preset: atajo para no elegir medio CLI por CLI ────────────────
+    preset = state.get("cli_preset", "custom")
+    if not state.get("non_interactive") and enabled and not state.get("cli_preset"):
+        choice = prompt_select(
+            "¿Por qué medio querés autenticar las IAs? (atajo — después podés ajustar cada una):",
+            choices=[
+                "todo-suscripcion  (OAuth / login por browser en cada IA — usás tus suscripciones)",
+                "todo-api          (pegás una API key por cada IA — pago por uso)",
+                "mix               (claude + codex por suscripción · agy + opencode por API)",
+                "custom            (elijo IA por IA)",
+            ],
+            default="custom            (elijo IA por IA)",
+        )
+        preset = choice.split(" ", 1)[0]
+        state["cli_preset"] = preset
+        if preset != "custom":
+            for cli in enabled:
+                if preset == "todo-suscripcion":
+                    auth_choices[cli] = "oauth"
+                elif preset == "todo-api":
+                    auth_choices[cli] = "api-key"
+                elif preset == "mix":
+                    auth_choices[cli] = "oauth" if cli in ("claude", "codex") else "api-key"
+            ok(f"Perfil '{preset}' aplicado a {len(enabled)} IA(s) — solo te pido las API keys que falten.")
+
     for cli in sorted(enabled):
         spec = CLI_CATALOG[cli]
         info("")

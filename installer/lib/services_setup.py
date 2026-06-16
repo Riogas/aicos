@@ -299,6 +299,81 @@ def _dashboard_standalone_symlinks(repo: Path) -> None:
         dst.symlink_to(src)
 
 
+# ── Container egress (salida a internet) ────────────────────────────────────
+# Algunos hosts (notablemente WSL2, pero también cualquiera con un docker
+# restart raro) dejan la cadena iptables FORWARD en DROP sin las reglas ACCEPT
+# de Docker → los containers resuelven DNS pero NO pueden abrir conexiones a
+# internet. Resultado: claude/codex/etc corren pero no llegan a sus APIs y
+# producen 0 output (timeouts). Lo detectamos y arreglamos.
+_EGRESS_TEST_HOST = "api.anthropic.com"
+
+
+def _container_egress_ok():
+    """True/False si pudimos testear; None si no había container listo."""
+    test_js = (
+        'const h=require("https");'
+        f'const r=h.get({{host:"{_EGRESS_TEST_HOST}",path:"/",timeout:6000}},'
+        's=>{process.exit(0)});'
+        'r.on("timeout",()=>process.exit(1));r.on("error",()=>process.exit(1));'
+    )
+    for _ in range(20):  # ~40s esperando que paperclip (node) esté exec-able
+        probe = subprocess.run(
+            ["docker", "exec", "aicos-paperclip", "node", "-e", test_js],
+            capture_output=True,
+        )
+        if probe.returncode in (0, 1):
+            return probe.returncode == 0  # 0=egress ok, 1=sin egress
+        time.sleep(2)  # 125 = container todavía no listo
+    return None
+
+
+def _apply_forward_fix() -> None:
+    subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], check=False)
+    unit = "\n".join([
+        "[Unit]",
+        "Description=AICOS - restore Docker container egress (FORWARD DROP workaround)",
+        "After=docker.service",
+        "Requires=docker.service",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        "ExecStart=/usr/sbin/iptables -P FORWARD ACCEPT",
+        "RemainAfterExit=yes",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "",
+    ])
+    subprocess.run(
+        ["sudo", "tee", "/etc/systemd/system/aicos-docker-forward.service"],
+        input=unit.encode(), capture_output=True, check=False,
+    )
+    subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+    subprocess.run(
+        ["sudo", "systemctl", "enable", "--now", "aicos-docker-forward.service"],
+        capture_output=True, check=False,
+    )
+
+
+def _ensure_container_egress() -> None:
+    info("Verificando salida a internet de los containers (las IAs necesitan llegar a sus APIs)…")
+    res = _container_egress_ok()
+    if res is True:
+        ok("egress de containers OK")
+        return
+    if res is None:
+        warn("no pude testear el egress (paperclip no respondió). Si las IAs fallan por")
+        warn("timeout, corré:  sudo iptables -P FORWARD ACCEPT")
+        return
+    warn("los containers NO tienen salida a internet — aplicando fix (FORWARD ACCEPT + systemd)…")
+    _apply_forward_fix()
+    after = _container_egress_ok()
+    if after is True:
+        ok("egress restaurado y persistente (aicos-docker-forward.service)")
+    else:
+        warn("egress sigue roto — revisá la red/NAT/iptables del host manualmente")
+
+
 def configure(state: dict) -> dict:
     repo = Path(state["repo"])
 
@@ -339,6 +414,11 @@ def configure(state: dict) -> dict:
 
     # 3. Bring up docker compose stack
     _docker_compose_up(repo)
+
+    # 3b. Asegurar que los containers tienen salida a internet (las CLIs corren
+    #     dentro de Paperclip vía el process adapter y necesitan llegar a sus
+    #     APIs). En WSL2/algunos hosts la cadena FORWARD queda en DROP.
+    _ensure_container_egress()
 
     # 4. Install + start systemd units
     _install_systemd_units(state, repo)
