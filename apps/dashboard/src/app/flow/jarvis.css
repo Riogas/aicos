@@ -318,14 +318,24 @@
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  display: grid;
-  place-items: center;
   overflow: hidden;
 }
-.radar-sweep {
+/* Both layers are dead-centered via negative margins (NOT transform) so the
+   `transform` channel stays free for the rotation animation — using transform
+   for both centering and rotation makes them fight and pushes the origin
+   off-center. translate(-50%,-50%) would be overwritten by `rotate()`. */
+.radar-sweep,
+.radar-rings {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   width: 140vmin;
   height: 140vmin;
+  margin-top: -70vmin;   /* −½ height: centers without touching transform */
+  margin-left: -70vmin;  /* −½ width  */
   border-radius: 50%;
+}
+.radar-sweep {
   background: conic-gradient(
     from 0deg,
     rgba(0,217,255,0.10) 0deg,
@@ -334,14 +344,14 @@
     transparent 360deg
   );
   animation: radar-rotate 14s linear infinite;
+  transform-origin: 50% 50%;
   opacity: 0.7;
 }
-@keyframes radar-rotate { to { transform: rotate(360deg); } }
+@keyframes radar-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 .radar-rings {
-  position: absolute;
-  width: 140vmin;
-  height: 140vmin;
-  border-radius: 50%;
   background:
     repeating-radial-gradient(circle,
       transparent 0px, transparent 119px,
