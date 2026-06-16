@@ -15,6 +15,7 @@ and the patch needs refresh.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -30,19 +31,45 @@ PAPERCLIP_PIN  = "524e18b0"
 
 def _clone(repo_root: Path) -> Path:
     target = repo_root / "vendor" / "paperclip"
-    if target.exists() and (target / ".git").exists():
-        ok(f"vendor/paperclip already present")
+    # "Ya presente" SOLO si tiene contenido real (no un git-init vacío de un
+    # intento previo fallido). `server/` es el dir raíz del source de Paperclip.
+    if (target / ".git").exists() and (target / "server").exists():
+        ok("vendor/paperclip already present")
         return target
+    # Limpiar cualquier intento previo roto/incompleto.
+    if target.exists():
+        warn("vendor/paperclip incompleto (clon previo falló) — limpiando y re-clonando")
+        shutil.rmtree(target, ignore_errors=True)
     target.parent.mkdir(parents=True, exist_ok=True)
-    info(f"Fetching Paperclip {PAPERCLIP_PIN} from {PAPERCLIP_REPO}…")
-    # `git clone --branch` doesn't accept a SHA, so init+fetch the pin
-    # directly (GitHub allows fetching arbitrary SHAs with depth=1).
-    target.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", str(target)], check=True)
-    subprocess.run(["git", "-C", str(target), "remote", "add", "origin", PAPERCLIP_REPO], check=True)
-    subprocess.run(["git", "-C", str(target), "fetch", "--depth", "1", "origin", PAPERCLIP_PIN], check=True)
-    subprocess.run(["git", "-C", str(target), "checkout", "-q", "FETCH_HEAD"], check=True)
-    ok(f"checked out {PAPERCLIP_PIN} at {target}")
+
+    # NOTA: `git fetch origin <sha>` NO sirve con un SHA abreviado (y muchos
+    # repos no permiten fetch por SHA arbitrario). Clonamos y hacemos checkout
+    # local del commit — eso sí resuelve el SHA abreviado de forma confiable.
+    # --filter=blob:none baja el grafo de commits sin todos los blobs (rápido);
+    # el checkout trae los blobs del commit fijado.
+    info(f"Clonando Paperclip desde {PAPERCLIP_REPO}…")
+    r = subprocess.run(
+        ["git", "clone", "--filter=blob:none", PAPERCLIP_REPO, str(target)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        # Fallback: clon normal (sin partial) por si el server no soporta filter.
+        warn("partial clone no soportado — clonando completo (más lento)")
+        shutil.rmtree(target, ignore_errors=True)
+        subprocess.run(["git", "clone", PAPERCLIP_REPO, str(target)], check=True)
+
+    info(f"Checkout del commit fijado {PAPERCLIP_PIN}…")
+    co = subprocess.run(
+        ["git", "-C", str(target), "checkout", "--quiet", PAPERCLIP_PIN],
+        capture_output=True, text=True,
+    )
+    if co.returncode != 0:
+        raise RuntimeError(
+            f"no pude hacer checkout de {PAPERCLIP_PIN}: {co.stderr.strip()}\n"
+            f"El commit fijado quizás ya no existe upstream. Actualizá PAPERCLIP_PIN "
+            f"en installer/lib/vendor.py a un commit válido y reintentá."
+        )
+    ok(f"vendor/paperclip en {PAPERCLIP_PIN}")
     return target
 
 
