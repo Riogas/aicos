@@ -258,6 +258,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   // Result holders — filled by the loop. Defaults assume nothing ran.
   let exitCode = -1;
   let output = "";
+  let rawStdout = ""; // crudo del CLI — solo para debug en fallos, NO se postea como resultado
   let stderr = "";
   let mode: ExecuteRunResult["mode"] = "direct-cli";
   let effectiveCli: string | undefined;
@@ -438,7 +439,12 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
       // Remember the latest attempt — even on failure — so we have a result
       // to return if the entire chain fails.
       exitCode = result.exitCode;
-      output = (result.parsedText ?? result.stdout).trim();
+      // SOLO el texto final parseado va al comentario del issue. Antes caia a
+      // result.stdout crudo cuando el parse fallaba (codex/opencode con solo
+      // reconnect-errors) → posteaba JSONL basura. El crudo queda en rawStdout
+      // para mostrar en fallos.
+      rawStdout = result.stdout;
+      output = (result.parsedText ?? "").trim();
       stderr = result.stderr;
       effectiveCli = chosen.cli;
       effectiveModel = chosen.model;
@@ -629,23 +635,35 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   }
 
   if (pc) {
-    const finalStatus: "done" | "blocked" = exitCode === 0 ? "done" : "blocked";
+    // FALSE-SUCCESS GUARD: un CLI puede salir con exit 0 pero sin producir nada
+    // util (p.ej. codex con solo "Reconnecting... timed out"). No marcar `done`
+    // en ese caso — marcar `blocked` para revisión humana.
+    const producedNothing = exitCode === 0 && !output && !commitInfo?.committed;
+    const finalStatus: "done" | "blocked" =
+      exitCode === 0 && !producedNothing ? "done" : "blocked";
     const personaTag = input.persona
-      ? `\n\n_(${input.persona.agentName} via ${mode})_`
+      ? `\n\n_(${input.persona.agentName} via ${mode}${effectiveCli ? ` · ${effectiveCli}` : ""})_`
       : "";
     const commitTag = commitInfo?.committed
       ? `\n\n**Auto-commit**: \`${commitInfo.commitSha}\` (${input.workspace?.projectName})`
       : commitInfo?.attempted && !commitInfo.hadChanges
         ? `\n\n_(sin cambios en workspace, no commit)_`
         : "";
-    const commentBody =
-      exitCode === 0
-        ? (output ||
-            "(termino correctamente pero sin output. Verificar si genero archivos.)") +
-          personaTag +
-          commitTag
+    const commentBody = producedNothing
+      ? `⚠️ El agente terminó con exit 0 pero **no produjo output ni cambios** ` +
+        `(probable timeout/reconnect del CLI). Marcado \`blocked\` para revisión y re-ejecución.` +
+        personaTag +
+        (stderr.trim()
+          ? `\n\n**stderr**\n\`\`\`\n${stderr.trim().slice(0, 1500)}\n\`\`\``
+          : "")
+      : exitCode === 0
+        ? output + personaTag + commitTag
         : `**Ejecucion fallo** (exit ${exitCode}, mode=${mode})${personaTag}\n\n` +
-          (output ? `\`\`\`\n${output.slice(0, 4000)}\n\`\`\`\n\n` : "") +
+          (output
+            ? `\`\`\`\n${output.slice(0, 4000)}\n\`\`\`\n\n`
+            : rawStdout.trim()
+              ? `\`\`\`\n${rawStdout.trim().slice(0, 2000)}\n\`\`\`\n\n`
+              : "") +
           (stderr.trim()
             ? `**stderr**\n\`\`\`\n${stderr.trim().slice(0, 4000)}\n\`\`\``
             : "");
