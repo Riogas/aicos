@@ -67,7 +67,10 @@ function processAdapterConfig(apiKey) {
       "--paperclip-process-mode",
     ],
     cwd: HOST_HOME,
-    timeoutSec: 600,
+    // 40 min: una tarea pesada (arquitectura / scaffolding de varios modulos)
+    // no cierra en 10 min; con 600s Paperclip mataba el run por timeout y lo
+    // relanzaba de cero -> loop infinito sin progreso. Override por agente si hace falta.
+    timeoutSec: 2400,
     env: {
       HOME: HOST_HOME,
       PATH: "/usr/local/bin:/usr/bin:/bin",
