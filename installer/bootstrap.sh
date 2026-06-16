@@ -43,4 +43,13 @@ else
 fi
 
 # Hand off to the installer.
-exec bash "$TARGET/installer/install.sh" "$@"
+# Cuando esto se corre vía `curl ... | bash`, el stdin del proceso es el caño
+# del curl, no la terminal → el wizard interactivo no puede leer los prompts
+# ("Input is not a terminal"). Si hay una terminal controladora disponible,
+# redirigimos el stdin del installer a /dev/tty para que los menús funcionen.
+if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+  exec bash "$TARGET/installer/install.sh" "$@" < /dev/tty
+else
+  warn "sin terminal (/dev/tty) — si el wizard necesita input, cloná el repo y corré: bash installer/install.sh"
+  exec bash "$TARGET/installer/install.sh" "$@"
+fi
