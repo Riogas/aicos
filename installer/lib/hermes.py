@@ -66,6 +66,29 @@ def _install_hermes() -> bool:
         return False
 
 
+def _run_hermes_setup() -> bool:
+    """Lanza `hermes setup` interactivo, HEREDANDO la terminal del wizard
+    (sin capturar output) — el usuario elige su provider (OpenRouter / Nous
+    Portal / API keys) y modelo (p.ej. owl alpha) ahí mismo. Devuelve True
+    si pudo lanzarlo (aunque el usuario lo cancele con Ctrl+C)."""
+    py = _find_hermes_python()
+    if py and py.name == "python":
+        cmd = [str(py), "-m", "hermes_cli.main", "setup"]
+    else:
+        cmd = ["hermes", "setup"]
+    info("Abriendo `hermes setup` — elegí tu provider (OpenRouter, etc.) y modelo. Ctrl+C cancela.")
+    info("")
+    try:
+        subprocess.run(cmd)  # SIN capture_output → interactivo, usa la terminal
+        return True
+    except KeyboardInterrupt:
+        warn("`hermes setup` cancelado — podés correrlo luego con:  hermes setup")
+        return False
+    except Exception as e:
+        warn(f"no pude lanzar `hermes setup`: {e} — corrélo a mano luego")
+        return False
+
+
 def _set_config(key: str, value: str) -> None:
     res = _hermes(["config", "set", key, str(value)])
     if res.returncode != 0:
@@ -110,24 +133,24 @@ def configure(state: dict) -> dict:
         _set_config(k, v)
     state["hermes_quiet_mode"] = True
 
-    # ── Step 3: auth strategy ────────────────────────────────────────────────
+    # ── Step 3: auth / cerebro de Hermes ─────────────────────────────────────
     auth_mode = state.get("hermes_auth_mode")
     if not auth_mode and not state.get("non_interactive"):
-        auth_mode = prompt_select(
-            "How should Hermes authenticate to its inference provider?",
+        choice = prompt_select(
+            "¿Cómo configurás el cerebro (inference) de Hermes?",
             choices=[
-                "oauth-subscription   (Claude/ChatGPT subscription via browser login)",
-                "api-key              (pay-as-you-go: OPENAI_API_KEY / ANTHROPIC_API_KEY / etc.)",
+                "hermes-setup  (abre `hermes setup` ahora — OpenRouter / Nous Portal / API keys + modelo)",
+                "api-key       (pego API keys de OpenAI / Anthropic / Google / Moonshot)",
+                "skip          (lo configuro después con `hermes setup`)",
             ],
-            default="oauth-subscription   (Claude/ChatGPT subscription via browser login)",
+            default="hermes-setup  (abre `hermes setup` ahora — OpenRouter / Nous Portal / API keys + modelo)",
         )
-        auth_mode = "oauth" if auth_mode.startswith("oauth") else "api-key"
+        auth_mode = choice.split(" ", 1)[0]  # hermes-setup | api-key | skip
         state["hermes_auth_mode"] = auth_mode
 
-    if auth_mode == "oauth":
-        info("Run this in a separate terminal to log in:")
-        info("    hermes login")
-        info("(skipping interactive login here — the browser flow doesn't compose with a wizard)")
+    # "oauth" = valor legacy de un wizard-state viejo → tratarlo como hermes-setup.
+    if auth_mode in ("hermes-setup", "oauth"):
+        _run_hermes_setup()
     elif auth_mode == "api-key":
         info("Provide an API key per provider you want Hermes to use. Empty = skip.")
         api_keys = state.setdefault("hermes_api_keys", {})
@@ -152,6 +175,9 @@ def configure(state: dict) -> dict:
             except Exception:
                 pass
             ok(f"Wrote {len(env_lines)} API keys to {env_path}")
+    else:  # skip
+        info("Hermes sin configurar — cuando quieras corré:  hermes setup")
+        info("(ahí elegís OpenRouter / Nous Portal / API keys + el modelo).")
 
     state.setdefault("phases_done", []).append("hermes")
     return state
