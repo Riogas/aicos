@@ -81,6 +81,10 @@ function processAdapterConfig(apiKey) {
       // el operador autenticó — el resto se saltea en el fallback chain (ver
       // isCliAvailable). Default claude-only; override con AICOS_ENABLED_CLIS.
       AICOS_ENABLED_CLIS: process.env.AICOS_ENABLED_CLIS || "claude",
+      // El agente corre como root dentro del container de Paperclip; claude
+      // rechaza --dangerously-skip-permissions como root salvo que IS_SANDBOX=1
+      // declare un entorno sandboxeado (el container lo es).
+      IS_SANDBOX: "1",
       QUOTA_SERVICE_URL: "http://host.docker.internal:7001",
       POLICY_SERVICE_URL: "http://host.docker.internal:7002",
       LEARNING_SERVICE_URL: "http://host.docker.internal:7003",
@@ -391,6 +395,10 @@ async function main() {
       keys[entry.agentRegistryId] = {
         agentName: entry.agentName,
         paperclipAgentId: entry.agentId,
+        // El bridge (registry.ts AgentKeyEntry) lee `token`; mantenemos `apiKey`
+        // como alias para scripts que ya lo consumen (repair-adapters). Sin
+        // `token`, buildIndex deja 0 agentes resolvables y todo run sale exit 2.
+        token: entry.token,
         apiKey: entry.token,
         keyId: entry.keyId,
       };

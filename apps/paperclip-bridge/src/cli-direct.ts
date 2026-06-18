@@ -411,6 +411,12 @@ export function invokeCli(opts: CliInvocationOptions): Promise<CliInvocationResu
       stdio: ["ignore", "pipe", "pipe"],
       cwd: opts.cwd,
       timeout: opts.timeoutMs ?? 600_000, // 10 min default
+      // El bridge corre como root dentro del container de Paperclip y spawnea
+      // claude con --dangerously-skip-permissions; claude lo rechaza como root
+      // salvo que IS_SANDBOX declare un entorno sandboxeado. Paperclip no
+      // siempre propaga esta env al adapter, así que la garantizamos acá (el
+      // container ES un sandbox aislado). No pisa un valor ya seteado.
+      env: { ...process.env, IS_SANDBOX: process.env.IS_SANDBOX ?? "1" },
     });
 
     let stdout = "";
