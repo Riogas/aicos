@@ -28,11 +28,20 @@ export async function POST(req: Request) {
   if (body.token !== expected) {
     return NextResponse.json({ error: "invalid token" }, { status: 401 });
   }
+  // Only flag the cookie `Secure` when the connection is actually HTTPS.
+  // Browsers drop `Secure` cookies served over plain HTTP (except on
+  // localhost), which would silently break login when AICOS is reached by
+  // LAN IP (e.g. a headless VM at http://192.168.x.x:3000). Honor
+  // x-forwarded-proto first (behind a TLS-terminating proxy), then the
+  // request URL protocol.
+  const fwdProto = req.headers.get("x-forwarded-proto");
+  const isHttps =
+    fwdProto === "https" || new URL(req.url).protocol === "https:";
   const res = NextResponse.json({ ok: true });
   res.cookies.set(COOKIE_NAME, body.token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttps,
     maxAge: COOKIE_MAX_AGE_S,
     path: "/",
   });
