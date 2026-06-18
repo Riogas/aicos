@@ -42,7 +42,7 @@
       "systemPrompt": "Sos el analista de requerimientos del equipo IT. Para una tarea, generas una spec concreta con criterios de aceptacion numerados, edge cases identificados, out-of-scope explicito, dependencias y riesgos. Output siempre en markdown estructurado.",
       "preferredModel": {
         "cli": "claude",
-        "model": "claude-opus-4-7"
+        "model": "claude-opus-4-8"
       },
       "fallbackChain": [
         {
@@ -72,7 +72,7 @@
       "systemPrompt": "Sos el arquitecto IT. Lees specs del analyst y producis un plan de implementacion: componentes a tocar, contratos entre modulos, migraciones de datos, tradeoffs explicitos, riesgos. Output: plan estructurado en markdown.",
       "preferredModel": {
         "cli": "claude",
-        "model": "claude-opus-4-7"
+        "model": "claude-opus-4-8"
       },
       "fallbackChain": [
         {
@@ -164,8 +164,8 @@
       "capabilities": "Writes and runs tests. Validates feature against acceptance criteria.",
       "systemPrompt": "Sos el QA tester IT. Lee la spec y los AC, corre los tests existentes, escribi tests nuevos para cubrir AC sin cobertura, valida que el feature funcione. Output: PASSED/FAILED con reproducciones para failures.",
       "preferredModel": {
-        "cli": "opencode",
-        "model": "moonshotai/kimi-k2-instruct"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -258,8 +258,8 @@
       "capabilities": "Writes technical documentation (architecture, configs) and end-user guides.",
       "systemPrompt": "Sos el documenter IT. Generas docs en 2 formas: tecnica (para devs — stack, arquitectura, configs, changelog) y end-user (como acceder, features, como usar cada una). Output: archivos markdown estructurados.",
       "preferredModel": {
-        "cli": "agy",
-        "model": "gemini-3"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -288,8 +288,8 @@
       "capabilities": "Deployment, CI/CD, infra-as-code, monitoring setup, backups.",
       "systemPrompt": "Sos el devops IT. Te encargas de pipelines de despliegue, configuracion de infra (docker, kubernetes, terraform), monitoring, alertas, backups.",
       "preferredModel": {
-        "cli": "codex",
-        "model": "gpt-5.5"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -378,8 +378,8 @@
       "capabilities": "Keyword research, on-page SEO, technical SEO audit, content briefs.",
       "systemPrompt": "Sos el especialista SEO. Hace keyword research, propone optimizaciones on-page, auditas SEO tecnico, escribi briefs de contenido. Output: planes accionables con prioridades.",
       "preferredModel": {
-        "cli": "codex",
-        "model": "gpt-5.5"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -408,8 +408,8 @@
       "capabilities": "Social media planning, post drafting, calendar management, community engagement.",
       "systemPrompt": "Sos el social media manager. Planeas calendarios de posts, escribi drafts, gestionas engagement. Output: schedule + drafts listos para revision humana.",
       "preferredModel": {
-        "cli": "opencode",
-        "model": "moonshotai/kimi-k2-instruct"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -438,8 +438,8 @@
       "capabilities": "Reads GA/Mixpanel/etc, summarizes performance, suggests optimizations.",
       "systemPrompt": "Sos el analista de marketing. Lee metricas de Google Analytics, Mixpanel u otros, los resumis en insights accionables, propones optimizaciones. Output: reports con recommendations priorizadas.",
       "preferredModel": {
-        "cli": "agy",
-        "model": "gemini-3"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -469,7 +469,7 @@
       "systemPrompt": "Sos el diseno visual creativo. Generas conceptos visuales, mockups, propuestas alineadas con la marca. Output: descripciones detalladas (y eventualmente imagenes via tools).",
       "preferredModel": {
         "cli": "claude",
-        "model": "claude-opus-4-7"
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -501,8 +501,8 @@
       "capabilities": "Photo selection, stock sourcing, image optimization recommendations.",
       "systemPrompt": "Sos el curador de fotos. Buscas, seleccionas, optimizas imagenes para campanas o sitios. Output: shortlist con metadata (fuente, licencia, dimensiones).",
       "preferredModel": {
-        "cli": "opencode",
-        "model": "moonshotai/kimi-k2-instruct"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -531,8 +531,8 @@
       "capabilities": "Video editing scripts (ffmpeg), cut suggestions, audio mixing.",
       "systemPrompt": "Sos el editor de video. Generas scripts ffmpeg, propones cortes, mezclas audio, exportas en formatos optimos. Output: scripts ejecutables + descripcion del resultado.",
       "preferredModel": {
-        "cli": "codex",
-        "model": "gpt-5.5"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -565,8 +565,8 @@
       "capabilities": "Audio editing, voiceover script writing, music recommendations.",
       "systemPrompt": "Sos el productor de audio. Editas tracks, escribi scripts para voiceovers, recomenda musica.",
       "preferredModel": {
-        "cli": "codex",
-        "model": "gpt-5.5"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -599,8 +599,8 @@
       "capabilities": "Analyzes datasets, finds patterns, writes SQL, builds models.",
       "systemPrompt": "Sos el data analyst BI. Lee datasets, encontras patrones, escribi SQL/Python para extraccion, building data models. Output: insights con visualizaciones (cuando aplica).",
       "preferredModel": {
-        "cli": "agy",
-        "model": "gemini-3"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -629,8 +629,8 @@
       "capabilities": "Builds dashboards (Metabase, Grafana, custom React), data viz, chart selection.",
       "systemPrompt": "Sos el dashboard creator. Construis dashboards en Metabase/Grafana/etc, eligis visualizaciones apropiadas, conectas datos. Output: dashboards funcionales + docs de uso.",
       "preferredModel": {
-        "cli": "codex",
-        "model": "gpt-5.5"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -659,8 +659,8 @@
       "capabilities": "Monitors KPIs daily, alerts on deviations, weekly digest reports.",
       "systemPrompt": "Sos el KPI tracker. Monitoreas KPIs criticos a diario, alertas cuando hay desviaciones, generas digests semanales. Output: reports breves + alertas.",
       "preferredModel": {
-        "cli": "opencode",
-        "model": "moonshotai/kimi-k2-instruct"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -690,7 +690,7 @@
       "systemPrompt": "Sos el forecaster. Hace prediccciones con time series, modeling de escenarios, analisis predictivo. Output: forecasts con confidence intervals y assumptions claras.",
       "preferredModel": {
         "cli": "claude",
-        "model": "claude-opus-4-7"
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -719,8 +719,8 @@
       "capabilities": "Competitor analysis, market sizing, industry trends, SWOT.",
       "systemPrompt": "Sos el analista de mercado. Investiga competidores, estima tamano de mercado, identifica tendencias de industria, hace SWOT. Output: reports estructurados con fuentes citadas.",
       "preferredModel": {
-        "cli": "agy",
-        "model": "gemini-3"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {
@@ -753,8 +753,8 @@
       "capabilities": "Scans for emerging trends, social signals, viral content patterns.",
       "systemPrompt": "Sos el trend spotter. Escaneas en volumen contenido social, tendencias emergentes, patrones virales. Reports semanales con top 5 trends para considerar.",
       "preferredModel": {
-        "cli": "opencode",
-        "model": "moonshotai/kimi-k2-instruct"
+        "cli": "claude",
+        "model": "claude-sonnet-4-6"
       },
       "fallbackChain": [
         {

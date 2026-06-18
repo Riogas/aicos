@@ -1,6 +1,57 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, join } from "node:path";
 
 export type SupportedCli = "claude" | "codex" | "agy" | "opencode" | "hermes";
+
+const SUPPORTED_CLIS: readonly SupportedCli[] = ["claude", "codex", "agy", "opencode", "hermes"];
+
+/** Nombre del binario en disco para cada CLI (hoy 1:1 con el id). */
+const CLI_BINARY: Record<SupportedCli, string> = {
+  claude: "claude",
+  codex: "codex",
+  agy: "agy",
+  opencode: "opencode",
+  hermes: "hermes",
+};
+
+function binaryOnPath(bin: string): boolean {
+  const PATH = process.env.PATH ?? "";
+  const exts = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  for (const dir of PATH.split(delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      if (existsSync(join(dir, bin + ext))) return true;
+    }
+  }
+  return false;
+}
+
+const availabilityCache = new Map<string, boolean>();
+
+/**
+ * ¿La CLI está realmente instalada en esta máquina (binario resoluble en PATH)?
+ *
+ * El retry-chain (preferredModel + fallbackChain) se filtra con esto ANTES de
+ * intentar spawnear: una CLI de fallback que no está instalada se descarta en
+ * vez de intentarse y morir con ENOENT. En un entorno solo-Claude, los
+ * fallbacks (codex/agy/opencode/hermes) simplemente no están instalados, así
+ * que el chain queda en Claude y no "cae" a nada más. Cuando el operador
+ * instale y configure otra CLI, su binario aparece en PATH y vuelve a entrar al
+ * chain automáticamente — sin tocar el registry.
+ *
+ * Cacheado por proceso: el PATH no cambia durante un run (y cada run en modo
+ * process-adapter es un proceso nuevo, así que recoge cambios igual).
+ */
+export function isCliAvailable(cli: string): boolean {
+  if (!SUPPORTED_CLIS.includes(cli as SupportedCli)) return false;
+  const c = cli as SupportedCli;
+  const cached = availabilityCache.get(c);
+  if (cached !== undefined) return cached;
+  const ok = binaryOnPath(CLI_BINARY[c]);
+  availabilityCache.set(c, ok);
+  return ok;
+}
 
 /** A live chunk of agent output streamed while the CLI runs. */
 export interface StreamChunk {

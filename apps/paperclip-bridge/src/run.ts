@@ -3,7 +3,7 @@ import { runHermesOneshotCaptured } from "./hermes.js";
 import { PaperclipClient } from "./paperclip-client.js";
 import type { PersonaResolution, ProjectWorkspace } from "./registry.js";
 import { buildPersonaPrompt } from "./registry.js";
-import { invokeCli, buildDirectCliPrompt } from "./cli-direct.js";
+import { invokeCli, buildDirectCliPrompt, isCliAvailable } from "./cli-direct.js";
 import type { SupportedCli } from "./cli-direct.js";
 import {
   retrieveAllScopes,
@@ -243,9 +243,27 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   // registry says. The retry loop walks this list and tries each until one
   // succeeds. Quota /select is re-consulted per attempt so that a provider
   // marked-down after a previous failure gets skipped automatically.
-  const candidates = input.persona
+  const allCandidates = input.persona
     ? buildCandidates(input.persona.preferredModel, input.persona.fallbackChain)
     : [];
+  // Solo intentamos CLIs realmente instaladas en esta máquina. Un candidato de
+  // la fallbackChain cuyo CLI no está instalado se descarta (no se spawnea →
+  // sin ENOENT ni intentos inútiles). En un entorno solo-Claude, los fallbacks
+  // codex/agy/opencode/hermes no están instalados, así que el chain queda en
+  // Claude y no "cae" a nada más. Si el operador instala/configura otra CLI,
+  // reaparece en PATH y vuelve a entrar al chain sin tocar el registry.
+  const skippedCandidates = allCandidates.filter((c) => !isCliAvailable(c.cli));
+  const installedCandidates = allCandidates.filter((c) => isCliAvailable(c.cli));
+  if (skippedCandidates.length > 0) {
+    process.stderr.write(
+      `[candidates] CLIs de fallback no instaladas, salteadas: ${skippedCandidates
+        .map((c) => `${c.cli}/${c.model}`)
+        .join(", ")}\n`,
+    );
+  }
+  // Si ninguna quedó disponible (ni la preferida), conservamos la lista original
+  // para que el run intente y falle con un error claro, en vez de "no candidates".
+  const candidates = installedCandidates.length > 0 ? installedCandidates : allCandidates;
 
   // Cooldown threshold: after AUTO_COOLDOWN_FAIL_THRESHOLD consecutive failures
   // of the same provider in this single executeRun, the bridge tells the quota
