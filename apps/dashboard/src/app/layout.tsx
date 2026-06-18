@@ -6,6 +6,7 @@ import { GeistMono } from "geist/font/mono";
 import {
   Activity,
   Gauge,
+  MessagesSquare,
   Sparkles,
   Shield,
   Terminal,
@@ -21,6 +22,7 @@ export const metadata: Metadata = {
 const NAV = [
   { href: "/", label: "Overview", icon: Activity },
   { href: "/flow", label: "Flow", icon: Workflow },
+  { href: "/studio", label: "Strategy Room", icon: MessagesSquare },
   { href: "/quota", label: "Quota", icon: Gauge },
   { href: "/learning", label: "Learning", icon: Sparkles },
   { href: "/policy", label: "Policy", icon: Shield },

@@ -1,0 +1,380 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// ── tipos ────────────────────────────────────────────────────────────────────
+type Who = "hermes" | "ceo";
+type ModelKey = "opus" | "sonnet";
+
+interface SpecTask {
+  ref?: string;
+  title: string;
+  description?: string;
+  agentId?: string;
+  dependsOn?: string[];
+  subtasks?: SpecTask[];
+}
+interface AicosSpec {
+  title?: string;
+  summary?: string;
+  newProject?: { name: string; description?: string } | null;
+  toolsNeeded?: string[];
+  connectionsNeeded?: string[];
+  tasks?: SpecTask[];
+}
+interface Msg {
+  id: number;
+  role: "user" | "agent";
+  text: string;
+  spec?: AicosSpec;
+  streaming?: boolean;
+}
+interface RosterAgent { id: string; name: string; department: string; color: string }
+interface ApplyResult {
+  ok?: boolean;
+  parent?: { identifier: string };
+  projectId?: string;
+  created?: { identifier: string; agentId?: string }[];
+  warnings?: string[];
+  error?: string;
+}
+
+const PAPERCLIP_UI = (host: string) => `http://${host}:3100`;
+
+// ── extrae el bloque ```aicos-spec``` del texto del agente ────────────────────
+function extractSpec(text: string): { spec?: AicosSpec; clean: string } {
+  const m = text.match(/```aicos-spec\s*([\s\S]*?)```/);
+  if (!m) return { clean: text };
+  try {
+    const spec = JSON.parse(m[1].trim()) as AicosSpec;
+    const clean = text.replace(m[0], "").trim();
+    return { spec, clean };
+  } catch {
+    return { clean: text };
+  }
+}
+
+// ── render markdown muy liviano (sin libs) ────────────────────────────────────
+function Rich({ text }: { text: string }) {
+  const blocks = text.split(/```/);
+  return (
+    <>
+      {blocks.map((blk, i) => {
+        if (i % 2 === 1) {
+          const nl = blk.indexOf("\n");
+          const code = nl >= 0 ? blk.slice(nl + 1) : blk;
+          return (
+            <pre key={i} className="sr-code">
+              <code>{code.replace(/\n$/, "")}</code>
+            </pre>
+          );
+        }
+        const lines = blk.split("\n");
+        return (
+          <div key={i}>
+            {lines.map((ln, j) => {
+              if (!ln.trim()) return <div key={j} className="h-2" />;
+              const h = ln.match(/^(#{1,3})\s+(.*)/);
+              if (h) return <div key={j} className="sr-h">{inline(h[2])}</div>;
+              const b = ln.match(/^\s*[-*]\s+(.*)/);
+              if (b) return <div key={j} className="sr-li">{inline(b[1])}</div>;
+              return <div key={j} className="sr-p">{inline(ln)}</div>;
+            })}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+function inline(s: string): React.ReactNode {
+  const parts = s.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
+    if (p.startsWith("`") && p.endsWith("`")) return <code key={i} className="sr-ic">{p.slice(1, -1)}</code>;
+    return <span key={i}>{p}</span>;
+  });
+}
+
+// ── componente principal ──────────────────────────────────────────────────────
+export function StudioClient() {
+  const [who, setWho] = useState<Who>("ceo");
+  const [model, setModel] = useState<ModelKey>("opus");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [roster, setRoster] = useState<Record<string, RosterAgent>>({});
+  const [applying, setApplying] = useState(false);
+  const [applyRes, setApplyRes] = useState<ApplyResult | null>(null);
+  const idRef = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+
+  useEffect(() => {
+    fetch("/api/studio/roster")
+      .then((r) => r.json())
+      .then((d: { agents: RosterAgent[] }) => {
+        const m: Record<string, RosterAgent> = {};
+        for (const a of d.agents || []) m[a.id] = a;
+        setRoster(m);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  const latestSpec = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].spec) return messages[i].spec;
+    return undefined;
+  }, [messages]);
+
+  const reset = () => {
+    setMessages([]);
+    setSessionId(null);
+    setApplyRes(null);
+    setBusy(false);
+  };
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    setApplyRes(null);
+    const userMsg: Msg = { id: ++idRef.current, role: "user", text };
+    const agentMsg: Msg = { id: ++idRef.current, role: "agent", text: "", streaming: true };
+    setMessages((m) => [...m, userMsg, agentMsg]);
+    setBusy(true);
+
+    try {
+      const res = await fetch("/api/studio/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interlocutor: who, message: text, model, sessionId }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let acc = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: { type: string; text?: string; sessionId?: string; error?: string };
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === "session" && ev.sessionId) setSessionId(ev.sessionId);
+          else if (ev.type === "text" && ev.text) {
+            acc += ev.text;
+            setMessages((m) => m.map((x) => (x.id === agentMsg.id ? { ...x, text: acc } : x)));
+          } else if (ev.type === "error") {
+            acc += `\n\n_⚠️ ${ev.error}_`;
+            setMessages((m) => m.map((x) => (x.id === agentMsg.id ? { ...x, text: acc } : x)));
+          }
+        }
+      }
+      const { spec, clean } = extractSpec(acc);
+      setMessages((m) => m.map((x) => (x.id === agentMsg.id ? { ...x, text: clean || acc, spec, streaming: false } : x)));
+    } catch (e) {
+      setMessages((m) => m.map((x) => (x.id === agentMsg.id ? { ...x, text: `⚠️ Error: ${(e as Error).message}`, streaming: false } : x)));
+    } finally {
+      setBusy(false);
+    }
+  }, [input, busy, who, model, sessionId]);
+
+  const applySpec = async (spec: AicosSpec) => {
+    setApplying(true);
+    setApplyRes(null);
+    try {
+      const res = await fetch("/api/studio/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spec }),
+      });
+      setApplyRes(await res.json());
+    } catch (e) {
+      setApplyRes({ error: (e as Error).message });
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="sr-root">
+      {/* header */}
+      <div className="sr-top">
+        <div>
+          <h1 className="sr-title">Strategy Room</h1>
+          <p className="sr-sub">Brainstorm con tu equipo → spec ejecutable → tickets en Paperclip</p>
+        </div>
+        <div className="sr-controls">
+          <Seg<Who>
+            value={who}
+            onChange={(v) => { setWho(v); reset(); }}
+            options={[{ k: "ceo", label: "CEO" }, { k: "hermes", label: "Hermes" }]}
+            disabled={busy}
+          />
+          <Seg<ModelKey>
+            value={model}
+            onChange={setModel}
+            options={[{ k: "opus", label: "Opus 4.8" }, { k: "sonnet", label: "Sonnet 4.6" }]}
+            disabled={busy}
+          />
+          <button className="sr-reset" onClick={reset} disabled={busy || messages.length === 0}>Nueva sesión</button>
+        </div>
+      </div>
+
+      <div className="sr-grid">
+        {/* chat */}
+        <div className="sr-chat">
+          <div className="sr-scroll" ref={scrollRef}>
+            {messages.length === 0 && (
+              <div className="sr-empty">
+                <div className="sr-empty-dot" />
+                <p>Contale al <b>{who === "ceo" ? "CEO" : "Hermes"}</b> qué querés construir, arreglar o mejorar.</p>
+                <p className="sr-empty-hint">Te va a preguntar lo que falte, recomendar y, cuando estén de acuerdo, generar una spec con el desglose de tareas y quién hace cada una.</p>
+              </div>
+            )}
+            {messages.map((m) => (
+              <div key={m.id} className={`sr-msg ${m.role}`}>
+                <div className="sr-bubble">
+                  {m.role === "agent" && <div className="sr-who">{who === "ceo" ? "CEO" : "Hermes"}</div>}
+                  <div className="sr-text"><Rich text={m.text || (m.streaming ? "…" : "")} /></div>
+                  {m.streaming && <span className="sr-cursor" />}
+                  {m.spec && <div className="sr-spec-chip">✦ Spec generada — ver panel →</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="sr-input">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder={busy ? "El agente está pensando…" : "Escribí tu mensaje… (Enter envía · Shift+Enter salto de línea)"}
+              rows={2}
+              disabled={busy}
+            />
+            <button className="sr-send" onClick={send} disabled={busy || !input.trim()}>
+              {busy ? "…" : "Enviar"}
+            </button>
+          </div>
+        </div>
+
+        {/* spec panel */}
+        <div className="sr-panel">
+          {!latestSpec ? (
+            <div className="sr-panel-empty">
+              <div className="sr-panel-title">SPEC</div>
+              <p>Cuando el agente y vos lleguen a un acuerdo, la spec ejecutable aparece acá con el desglose de tareas, los responsables y un botón para crearla en Paperclip.</p>
+            </div>
+          ) : (
+            <SpecView
+              spec={latestSpec}
+              roster={roster}
+              onApply={() => applySpec(latestSpec)}
+              applying={applying}
+              applyRes={applyRes}
+              host={host}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── segmented control ─────────────────────────────────────────────────────────
+function Seg<T extends string>({ value, onChange, options, disabled }: {
+  value: T; onChange: (v: T) => void; options: { k: T; label: string }[]; disabled?: boolean;
+}) {
+  return (
+    <div className="sr-seg">
+      {options.map((o) => (
+        <button key={o.k} className={value === o.k ? "on" : ""} disabled={disabled} onClick={() => onChange(o.k)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── vista de la spec ──────────────────────────────────────────────────────────
+function SpecView({ spec, roster, onApply, applying, applyRes, host }: {
+  spec: AicosSpec; roster: Record<string, RosterAgent>; onApply: () => void; applying: boolean; applyRes: ApplyResult | null; host: string;
+}) {
+  const count = (spec.tasks || []).reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0);
+  return (
+    <div className="sr-spec">
+      <div className="sr-panel-title">SPEC · {count} tarea{count === 1 ? "" : "s"}</div>
+      <h2 className="sr-spec-h">{spec.title || "Spec"}</h2>
+      {spec.summary && <p className="sr-spec-sum">{spec.summary}</p>}
+
+      {spec.newProject?.name && (
+        <div className="sr-newproj">🗂 Proyecto nuevo: <b>{spec.newProject.name}</b></div>
+      )}
+
+      {(spec.toolsNeeded?.length || spec.connectionsNeeded?.length) ? (
+        <div className="sr-needs">
+          {spec.toolsNeeded?.length ? (
+            <div><span className="sr-needs-lbl">Tools</span>{spec.toolsNeeded.map((t, i) => <span key={i} className="sr-chip">{t}</span>)}</div>
+          ) : null}
+          {spec.connectionsNeeded?.length ? (
+            <div><span className="sr-needs-lbl">Conexiones</span>{spec.connectionsNeeded.map((t, i) => <span key={i} className="sr-chip warn">{t}</span>)}</div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="sr-tasks">
+        {(spec.tasks || []).map((t, i) => <TaskRow key={i} t={t} roster={roster} depth={0} />)}
+      </div>
+
+      {!applyRes?.ok ? (
+        <button className="sr-apply" onClick={onApply} disabled={applying}>
+          {applying ? "Creando…" : "Crear en Paperclip (backlog)"}
+        </button>
+      ) : null}
+
+      {applyRes && (
+        <div className={`sr-result ${applyRes.ok ? "ok" : "err"}`}>
+          {applyRes.ok ? (
+            <>
+              <div>✓ Creado: <b>{applyRes.parent?.identifier}</b> + {applyRes.created?.length || 0} tareas en backlog.</div>
+              <a href={PAPERCLIP_UI(host)} target="_blank" rel="noreferrer">Abrir en Paperclip →</a>
+              {applyRes.warnings && applyRes.warnings.length > 0 && (
+                <ul className="sr-warns">{applyRes.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+              )}
+            </>
+          ) : (
+            <div>⚠️ {applyRes.error || "no se pudo crear"}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskRow({ t, roster, depth }: { t: SpecTask; roster: Record<string, RosterAgent>; depth: number }) {
+  const a = t.agentId ? roster[t.agentId] : undefined;
+  return (
+    <div className="sr-task" style={{ marginLeft: depth * 14 }}>
+      <div className="sr-task-head">
+        {depth > 0 && <span className="sr-task-tick">└</span>}
+        <span className="sr-task-title">{t.title}</span>
+        {t.agentId && (
+          <span className="sr-agent" style={{ borderColor: (a?.color || "#71717a") + "66", color: a?.color || "#a1a1aa" }}>
+            {a?.name || t.agentId}
+          </span>
+        )}
+      </div>
+      {t.description && <div className="sr-task-desc">{t.description}</div>}
+      {(t.subtasks || []).map((s, i) => <TaskRow key={i} t={s} roster={roster} depth={depth + 1} />)}
+    </div>
+  );
+}
