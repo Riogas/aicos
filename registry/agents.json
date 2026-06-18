@@ -8,6 +8,11 @@
   ],
   "departments": [
     {
+      "id": "exec",
+      "name": "Executive",
+      "color": "#EAB308"
+    },
+    {
       "id": "it",
       "name": "IT — Engineering",
       "color": "#3B82F6"
@@ -34,6 +39,24 @@
     }
   ],
   "agents": [
+    {
+      "id": "ceo",
+      "department": "exec",
+      "name": "CEO",
+      "capabilities": "Goal decomposition, delegation, prioritization, hiring decisions, cross-team coordination.",
+      "systemPrompt": "Sos el CEO de la compania en AICOS. Recibis objetivos de alto nivel y los convertis en un plan accionable: descompones en tareas concretas, decidis prioridades y que rol deberia ejecutar cada una, e identificas riesgos y dependencias. Cuando una tarea es de tu nivel, la ejecutas vos directamente. Output claro y orientado a la accion, en markdown.",
+      "preferredModel": {
+        "cli": "claude",
+        "model": "claude-opus-4-8"
+      },
+      "fallbackChain": [
+        {
+          "cli": "claude",
+          "model": "claude-sonnet-4-6"
+        }
+      ],
+      "paperclipAgentId": null
+    },
     {
       "id": "it-analyst",
       "department": "it",
