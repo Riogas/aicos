@@ -388,8 +388,10 @@ async function main() {
     await pollUntilApprovedOrTimeout(state);
   }
 
-  // Fase 3: persistir keys en archivo dedicado + updatear registry con paperclipAgentId
-  const keys = {};
+  // Fase 3: persistir keys en archivo dedicado + updatear registry con paperclipAgentId.
+  // Merge sobre lo que ya exista (p.ej. la entrada "ceo" que escribe el installer
+  // antes de este onboard) para no pisarla.
+  const keys = (await loadJson(KEYS_PATH, {})) || {};
   for (const entry of Object.values(state.byAgent)) {
     if (entry.status === "claimed" && entry.token) {
       keys[entry.agentRegistryId] = {

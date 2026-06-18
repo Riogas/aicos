@@ -34,7 +34,11 @@ CLI_CATALOG = {
         "install_cmd":  ["npm", "install", "-g", "@anthropic-ai/claude-code"],
         "login_hint":   "claude   (arranca y corré /login — suscripción)  |  claude setup-token (token de larga vida)",
         "api_env_var":  "ANTHROPIC_API_KEY",
-        "default_models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4"],
+        "default_models": ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        # `claude auth login` corrido por el wizard DENTRO del container, como el
+        # mismo uid con el que corren los agentes (Path A) → las credenciales
+        # quedan en el home montado con el owner correcto, sin chown manual.
+        "container_oauth": True,
     },
     "codex": {
         "name":         "Codex CLI (OpenAI/ChatGPT)",
@@ -184,8 +188,13 @@ def configure(state: dict) -> dict:
             auth_choices[cli] = mode
 
         if mode == "oauth":
-            info(f"Run this in a separate terminal to log in:")
-            info(f"    {spec['login_hint']}")
+            if spec.get("container_oauth"):
+                info(f"  {cli}: el login OAuth lo abre el wizard DENTRO del container al")
+                info(f"  final de la fase Paperclip (así las credenciales quedan en el lugar")
+                info(f"  y con el owner que usan los agentes — sin pasos manuales).")
+            else:
+                info(f"  Corré esto en otra terminal para loguearte:")
+                info(f"    {spec['login_hint']}")
         elif mode == "api-key":
             existing = os.environ.get(spec["api_env_var"])
             mask = f"…{existing[-4:]}" if existing else "unset"
@@ -204,6 +213,14 @@ def configure(state: dict) -> dict:
         info("")
         info("Recordatorio opencode: corré `bash scripts/setup-opencode-auth.sh` para")
         info("keys de Moonshot/Xiaomi y el opencode.json de permisos por workspace.")
+
+    # Allowlist de CLIs realmente habilitadas (las que tienen auth oauth/api-key,
+    # no las skippeadas). El bridge la lee como AICOS_ENABLED_CLIS para no
+    # intentar como fallback un CLI instalado-en-la-imagen pero sin credenciales
+    # (codex/opencode vienen en la imagen de Paperclip). Default "claude".
+    active = [c for c in sorted(enabled) if auth_choices.get(c) in ("oauth", "api-key")]
+    state["aicos_enabled_clis"] = ",".join(active) if active else "claude"
+    ok(f"CLIs habilitadas para el bridge (AICOS_ENABLED_CLIS): {state['aicos_enabled_clis']}")
 
     state.setdefault("phases_done", []).append("clis")
     return state

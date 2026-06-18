@@ -28,6 +28,7 @@ The wizard never touches Paperclip's DB directly — REST only.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -252,9 +253,13 @@ def _onboard_specialists(state: dict, token: str, company_id: str, repo: Path) -
     keys_path = repo / ".secrets" / "agent-keys.json"
     if keys_path.exists():
         try:
-            n = len(json.loads(keys_path.read_text()))
-            ok(f"agent-keys.json already exists ({n} agents) — skipping onboarding")
-            return
+            # Ojo: _onboard_ceo crea agent-keys.json con la entrada "ceo" ANTES de
+            # esto. Solo salteamos si ya hay specialists (entradas != "ceo").
+            existing = json.loads(keys_path.read_text())
+            specialists = [k for k in existing if k != "ceo"]
+            if specialists:
+                ok(f"agent-keys.json ya tiene {len(specialists)} specialists — skipping onboarding")
+                return
         except Exception:
             warn("agent-keys.json corrupt — re-onboarding")
 
@@ -276,7 +281,10 @@ def _onboard_specialists(state: dict, token: str, company_id: str, repo: Path) -
     info("Onboarding the 26 specialist agents (auto-approved with the board token)…")
     env = {**__import__("os").environ,
            "PAPERCLIP_BOARD_TOKEN": token,
-           "AICOS_COMPANY_ID":      company_id}
+           "AICOS_COMPANY_ID":      company_id,
+           # Allowlist de CLIs configuradas → el adapter process lo inyecta para
+           # que el bridge no caiga a un CLI sin credenciales.
+           "AICOS_ENABLED_CLIS":    state.get("aicos_enabled_clis") or "claude"}
     r = subprocess.run(
         ["node", str(onboard_script), f"--invite={invite_token}", f"--api={PAPERCLIP_URL}"],
         cwd=repo, env=env,
@@ -284,6 +292,193 @@ def _onboard_specialists(state: dict, token: str, company_id: str, repo: Path) -
     if r.returncode != 0:
         raise RuntimeError("onboard-agents.mjs failed — see its output above")
     ok(f"Agents onboarded → {keys_path}")
+
+
+# ── helpers compartidos para el CEO y el auth ────────────────────────────────
+def _read_infra_value(repo: Path, key: str, default: str = "") -> str:
+    env = repo / "infra" / ".env"
+    if env.exists():
+        for line in env.read_text().splitlines():
+            if line.startswith(key + "="):
+                return line.split("=", 1)[1].strip().strip('"')
+    return default
+
+
+def _host_home(state: dict, repo: Path) -> str:
+    # El home del host montado en el container (Path A, mismo path adentro/afuera).
+    return (state.get("aicos_host_home")
+            or _read_infra_value(repo, "AICOS_HOST_HOME")
+            or str(Path.home()))
+
+
+def _process_adapter_config(api_key: str, host_home: str, aicos_root: str, enabled_clis: str) -> dict:
+    """Mismo shape que processAdapterConfig() en scripts/onboard-agents.mjs."""
+    return {
+        "command": "/usr/local/bin/node",
+        "args": [f"{aicos_root}/apps/paperclip-bridge/dist/index.js", "--paperclip-process-mode"],
+        "cwd": host_home,
+        "timeoutSec": 2400,
+        "env": {
+            "HOME": host_home,
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "AICOS_ROOT": aicos_root,
+            "AICOS_API_KEY": api_key,
+            "AICOS_ENABLED_CLIS": enabled_clis,
+            # claude rechaza --dangerously-skip-permissions como root salvo IS_SANDBOX.
+            "IS_SANDBOX": "1",
+            "QUOTA_SERVICE_URL": "http://host.docker.internal:7001",
+            "POLICY_SERVICE_URL": "http://host.docker.internal:7002",
+            "LEARNING_SERVICE_URL": "http://host.docker.internal:7003",
+        },
+    }
+
+
+def _find_ceo(token: str, company_id: str) -> dict | None:
+    code, data = _api("GET", f"/api/companies/{company_id}/agents", token=token)
+    if code != 200 or not data:
+        return None
+    items = data if isinstance(data, list) else (data.get("items") or data.get("agents") or [])
+    for a in items:
+        if (a.get("role") or "").lower() == "ceo":
+            return a
+    return None
+
+
+def _reactivate_ceo(repo: Path) -> None:
+    """Saca al CEO de 'terminated'/'error'/paused. Única excepción a "REST only":
+    Paperclip no expone un endpoint para des-terminar un agente, y un CEO no-activo
+    bloquea la aprobación de TODO join-request."""
+    user = _read_infra_value(repo, "POSTGRES_USER", "aicos")
+    db = _read_infra_value(repo, "POSTGRES_DB", "paperclip")
+    try:
+        subprocess.run(
+            ["docker", "exec", "aicos-postgres", "psql", "-U", user, "-d", db, "-c",
+             "update agents set status='active', paused_at=null, pause_reason=null "
+             "where role='ceo' and status<>'active'"],
+            check=False, capture_output=True, text=True, timeout=20,
+        )
+    except Exception as e:
+        warn(f"no pude reactivar el CEO via psql: {e}")
+
+
+def _onboard_ceo(state: dict, token: str, company_id: str, repo: Path) -> None:
+    """Convierte el CEO (Paperclip lo crea como hermes_local) en agente
+    process/claude opus-4-8, igual que los workers. Si queda en hermes_local
+    falla en cada run (hermes no está en la imagen) → se auto-termina → bloquea
+    la aprobación de join-requests."""
+    ceo = _find_ceo(token, company_id)
+    if not ceo:
+        warn("No encontré un CEO en la company — salteo onboard del CEO")
+        return
+    ceo_id = ceo["id"]
+    if (ceo.get("adapterType") or ceo.get("adapter_type")) == "process":
+        ok("CEO ya está en adapter process")
+        _reactivate_ceo(repo)
+        return
+
+    code, keyresp = _api("POST", f"/api/agents/{ceo_id}/keys", token=token,
+                         body={"name": "AICOS CEO process key"})
+    if code not in (200, 201) or not isinstance(keyresp, dict) or not keyresp.get("token"):
+        warn(f"No pude crear API key del CEO (HTTP {code}) — queda en hermes_local")
+        return
+    ceo_token = keyresp["token"]
+    host_home = _host_home(state, repo)
+    aicos_root = str(repo)
+    enabled = state.get("aicos_enabled_clis") or "claude"
+
+    # registry: fijar paperclipAgentId del CEO (la persona ya existe en el repo)
+    reg_path = repo / "registry" / "agents.json"
+    try:
+        reg = json.loads(reg_path.read_text())
+        ceo_entry = next((a for a in reg["agents"] if a.get("id") == "ceo"), None)
+        if ceo_entry is None:
+            ceo_entry = {"id": "ceo", "department": "exec", "name": "CEO",
+                         "capabilities": "Goal decomposition, delegation, prioritization.",
+                         "systemPrompt": "Sos el CEO de la compania en AICOS.",
+                         "preferredModel": {"cli": "claude", "model": "claude-opus-4-8"},
+                         "fallbackChain": [{"cli": "claude", "model": "claude-sonnet-4-6"}]}
+            reg.setdefault("agents", []).insert(0, ceo_entry)
+        ceo_entry["paperclipAgentId"] = ceo_id
+        reg_path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n")
+    except Exception as e:
+        warn(f"No pude actualizar el registry con el CEO: {e}")
+
+    # agent-keys.json: el bridge lee `token` (buildIndex). Merge para no pisar.
+    keys_path = repo / ".secrets" / "agent-keys.json"
+    try:
+        keys = json.loads(keys_path.read_text()) if keys_path.exists() else {}
+        keys["ceo"] = {"agentName": "CEO", "paperclipAgentId": ceo_id,
+                       "token": ceo_token, "apiKey": ceo_token, "keyId": keyresp.get("id")}
+        keys_path.parent.mkdir(parents=True, exist_ok=True)
+        keys_path.write_text(json.dumps(keys, ensure_ascii=False, indent=2) + "\n")
+    except Exception as e:
+        warn(f"No pude escribir agent-keys.json para el CEO: {e}")
+
+    cfg = _process_adapter_config(ceo_token, host_home, aicos_root, enabled)
+    code, _ = _api("PATCH", f"/api/agents/{ceo_id}", token=token,
+                   body={"adapterType": "process", "adapterConfig": cfg,
+                         "replaceAdapterConfig": True})
+    if code in (200, 201):
+        ok("CEO migrado a adapter process (claude/opus-4-8)")
+    else:
+        warn(f"PATCH del adapter del CEO falló (HTTP {code}) — queda en hermes_local")
+    _reactivate_ceo(repo)
+
+
+# ── login OAuth de CLIs DENTRO del container (mismo uid que los agentes) ──────
+_CONTAINER_OAUTH_CMDS = {"claude": ["claude", "auth", "login"]}
+
+
+def _cli_logged_in(uid: int, home: str, cli: str) -> bool:
+    if cli != "claude":
+        return False
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-u", str(uid), "-e", f"HOME={home}",
+             "aicos-paperclip", "claude", "auth", "status"],
+            capture_output=True, text=True, timeout=25,
+        )
+        return '"loggedIn": true' in r.stdout or '"loggedIn":true' in r.stdout
+    except Exception:
+        return False
+
+
+def _authenticate_oauth_clis(state: dict, repo: Path) -> None:
+    """Corre `claude auth login` DENTRO del container, como el uid de los agentes.
+    Path A: los agentes corren en aicos-paperclip como uid no-root, leyendo las
+    credenciales del home del host montado. Si el login se hace como root, ese uid
+    no las puede leer → "Not logged in". Hacerlo acá deja el owner correcto sin chown."""
+    oauth_clis = [c for c in state.get("cli_enabled", [])
+                  if state.get("cli_auth", {}).get(c) == "oauth" and c in _CONTAINER_OAUTH_CMDS]
+    if not oauth_clis:
+        return
+    uid, gid = os.getuid(), os.getgid()
+    home = _host_home(state, repo)
+    if state.get("non_interactive"):
+        info("non-interactive: salteo el login OAuth. Hacelo después con:")
+        for c in oauth_clis:
+            info(f"    docker exec -u {uid}:{gid} -e HOME={home} -it aicos-paperclip "
+                 f"{' '.join(_CONTAINER_OAUTH_CMDS[c])}")
+        return
+    for cli in oauth_clis:
+        if _cli_logged_in(uid, home, cli):
+            ok(f"{cli} ya autenticado (uid {uid})")
+            continue
+        info("")
+        info(f"━━ Login de {cli} (suscripción) ━━")
+        info(f"Se abre el login de {cli} dentro del container — seguí la URL en el browser")
+        info(f"y pegá el código acá. (uid {uid}, HOME {home})")
+        cmd = ["docker", "exec", "-u", f"{uid}:{gid}", "-e", f"HOME={home}", "-it",
+               "aicos-paperclip"] + _CONTAINER_OAUTH_CMDS[cli]
+        try:
+            subprocess.run(cmd)  # hereda el TTY del wizard
+        except Exception as e:
+            warn(f"login de {cli} falló: {e}")
+            continue
+        if _cli_logged_in(uid, home, cli):
+            ok(f"{cli} autenticado ✓")
+        else:
+            warn(f"{cli} sigue sin autenticar — revisá con `claude auth status` y reintenta")
 
 
 def configure(state: dict) -> dict:
@@ -323,7 +518,14 @@ def configure(state: dict) -> dict:
     token = _obtain_board_token(state)
     company_id = _ensure_company(state, token)
     _ensure_hermes_agent(state, token, company_id, claim_path)
+    # CEO → process/claude ANTES de nada: si queda hermes_local corre y se
+    # auto-termina, y un CEO no-activo bloquea la aprobación de los 26.
+    _onboard_ceo(state, token, company_id, repo)
+    # Login de claude (y otros OAuth) dentro del container, con el uid de los
+    # agentes — así el CEO y los workers ya tienen credenciales cuando corren.
+    _authenticate_oauth_clis(state, repo)
     _onboard_specialists(state, token, company_id, repo)
+    _reactivate_ceo(repo)  # red de seguridad por si se terminó durante el onboard
 
     state.setdefault("phases_done", []).append("paperclip")
     return state
