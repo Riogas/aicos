@@ -108,7 +108,27 @@ async function saveJson(path, data, mode = 0o600) {
   await writeFile(path, JSON.stringify(data, null, 2) + "\n", { mode });
 }
 
-async function submitJoinRequest(agent) {
+// Paperclip invites son de UN SOLO USO: al aceptarlos se estampa accepted_at y
+// el server rechaza el siguiente accept con "Invite already consumed". Por eso
+// en modo installer creamos un invite fresco por agente (necesita board token).
+async function createInvite(companyId) {
+  const res = await fetch(`${API_BASE}/api/companies/${companyId}/invites`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${BOARD_TOKEN}`,
+    },
+    body: JSON.stringify({ allowedJoinTypes: "agent" }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`createInvite: ${res.status} ${res.statusText} ${text}`);
+  }
+  const inv = await res.json();
+  return inv.token;
+}
+
+async function submitJoinRequest(agent, inviteToken = INVITE_ID) {
   // El join request entra como http (payload liviano); el PATCH post-claim lo
   // migra a `process` con la API key real (chicken-and-egg: la key no existe
   // hasta el claim).
@@ -128,7 +148,7 @@ async function submitJoinRequest(agent) {
       aicosDepartment: agent.department,
     },
   };
-  const res = await fetch(`${API_BASE}/api/invites/${INVITE_ID}/accept`, {
+  const res = await fetch(`${API_BASE}/api/invites/${inviteToken}/accept`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -317,7 +337,15 @@ async function main() {
       continue;
     }
     try {
-      const result = await submitJoinRequest(agent);
+      // Invite fresco por agente (single-use). Con board token lo creamos acá;
+      // sin board token usamos el invite global (alcanza para 1 solo agente).
+      let inviteToken = INVITE_ID;
+      if (BOARD_TOKEN) {
+        const companyId = process.env.AICOS_COMPANY_ID || "";
+        if (!companyId) throw new Error("falta AICOS_COMPANY_ID para crear invites por agente");
+        inviteToken = await createInvite(companyId);
+      }
+      const result = await submitJoinRequest(agent, inviteToken);
       state.byAgent[agent.id] = {
         agentRegistryId: agent.id,
         agentName: agent.name,

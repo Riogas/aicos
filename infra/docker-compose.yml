@@ -87,6 +87,13 @@ services:
       PAPERCLIP_CONFIG: /paperclip/instances/default/config.json
       PAPERCLIP_DEPLOYMENT_MODE: authenticated
       PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+      # AICOS guarda la API key de cada agente inline en el adapter `process`
+      # (env AICOS_API_KEY). El modo `authenticated` activa por defecto el
+      # strict secret mode, que rechaza secretos sensibles en texto plano y
+      # exige secret-refs — incompatible con el onboarding de AICOS. Como es un
+      # box self-hosted single-tenant (las keys ya viven en .secrets/ en claro),
+      # lo desactivamos para permitir el adapter process.
+      PAPERCLIP_SECRETS_STRICT_MODE: "false"
       # Hostnames permitidos para acceder a la UI (modo private). El installer
       # escribe AICOS_ALLOWED_HOSTNAMES en infra/.env con localhost + todas las
       # IPs del host (así una VM accedida por su IP privada no queda bloqueada).
