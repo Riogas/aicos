@@ -246,17 +246,16 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   const allCandidates = input.persona
     ? buildCandidates(input.persona.preferredModel, input.persona.fallbackChain)
     : [];
-  // Solo intentamos CLIs realmente instaladas en esta máquina. Un candidato de
-  // la fallbackChain cuyo CLI no está instalado se descarta (no se spawnea →
-  // sin ENOENT ni intentos inútiles). En un entorno solo-Claude, los fallbacks
-  // codex/agy/opencode/hermes no están instalados, así que el chain queda en
-  // Claude y no "cae" a nada más. Si el operador instala/configura otra CLI,
-  // reaparece en PATH y vuelve a entrar al chain sin tocar el registry.
+  // Solo intentamos CLIs usables: habilitadas (AICOS_ENABLED_CLIS) e instaladas
+  // (binario en PATH). Un candidato de la fallbackChain que no pasa el filtro se
+  // descarta (no se spawnea → sin ENOENT ni intentos contra un CLI sin auth). En
+  // un entorno solo-Claude, codex/opencode vienen en la imagen pero no están en
+  // el allowlist, y agy/hermes no están instalados → el chain queda en Claude.
   const skippedCandidates = allCandidates.filter((c) => !isCliAvailable(c.cli));
   const installedCandidates = allCandidates.filter((c) => isCliAvailable(c.cli));
   if (skippedCandidates.length > 0) {
     process.stderr.write(
-      `[candidates] CLIs de fallback no instaladas, salteadas: ${skippedCandidates
+      `[candidates] CLIs no habilitadas/instaladas, salteadas: ${skippedCandidates
         .map((c) => `${c.cli}/${c.model}`)
         .join(", ")}\n`,
     );

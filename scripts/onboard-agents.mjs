@@ -76,6 +76,11 @@ function processAdapterConfig(apiKey) {
       PATH: "/usr/local/bin:/usr/bin:/bin",
       AICOS_ROOT,
       AICOS_API_KEY: apiKey,
+      // CLIs habilitadas/autenticadas. La imagen de Paperclip trae
+      // claude/codex/opencode instalados, pero el bridge solo debe usar las que
+      // el operador autenticó — el resto se saltea en el fallback chain (ver
+      // isCliAvailable). Default claude-only; override con AICOS_ENABLED_CLIS.
+      AICOS_ENABLED_CLIS: process.env.AICOS_ENABLED_CLIS || "claude",
       QUOTA_SERVICE_URL: "http://host.docker.internal:7001",
       POLICY_SERVICE_URL: "http://host.docker.internal:7002",
       LEARNING_SERVICE_URL: "http://host.docker.internal:7003",

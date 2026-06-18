@@ -30,22 +30,38 @@ function binaryOnPath(bin: string): boolean {
 const availabilityCache = new Map<string, boolean>();
 
 /**
- * ¿La CLI está realmente instalada en esta máquina (binario resoluble en PATH)?
+ * ¿Esta CLI es usable (instalada Y habilitada/configurada) en este entorno?
  *
  * El retry-chain (preferredModel + fallbackChain) se filtra con esto ANTES de
- * intentar spawnear: una CLI de fallback que no está instalada se descarta en
- * vez de intentarse y morir con ENOENT. En un entorno solo-Claude, los
- * fallbacks (codex/agy/opencode/hermes) simplemente no están instalados, así
- * que el chain queda en Claude y no "cae" a nada más. Cuando el operador
- * instale y configure otra CLI, su binario aparece en PATH y vuelve a entrar al
- * chain automáticamente — sin tocar el registry.
+ * intentar spawnear, con dos gates:
  *
- * Cacheado por proceso: el PATH no cambia durante un run (y cada run en modo
- * process-adapter es un proceso nuevo, así que recoge cambios igual).
+ *  1. ALLOWLIST — `AICOS_ENABLED_CLIS` (CSV, ej. "claude" o "claude,codex").
+ *     Si está seteada, SOLO esas CLIs se consideran configuradas; el resto se
+ *     descarta aunque su binario esté presente. Esto es clave en Path A: la
+ *     imagen de Paperclip trae claude/codex/opencode instalados, pero solo el
+ *     que el operador autenticó debe usarse — si no, el chain "caería" a un CLI
+ *     instalado-pero-sin-credenciales y fallaría por auth. En un entorno
+ *     solo-Claude se setea `AICOS_ENABLED_CLIS=claude` y el chain nunca intenta
+ *     codex/opencode. Sin la var (no seteada), no hay allowlist y se cae al
+ *     gate 2 solo (compat hacia atrás).
+ *
+ *  2. BINARIO EN PATH — descarta CLIs no instaladas (evita ENOENT). agy/hermes
+ *     no están en la imagen de Paperclip, así que se saltean por acá.
+ *
+ * Cacheado por proceso el gate 2 (el PATH no cambia durante un run; y cada run
+ * en modo process-adapter es un proceso nuevo, así que recoge cambios igual).
+ * El allowlist se relee siempre (es barato y permite override por run via env).
  */
 export function isCliAvailable(cli: string): boolean {
   if (!SUPPORTED_CLIS.includes(cli as SupportedCli)) return false;
   const c = cli as SupportedCli;
+  // Gate 1: allowlist explícita de CLIs habilitadas/configuradas.
+  const allow = (process.env.AICOS_ENABLED_CLIS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (allow.length > 0 && !allow.includes(c)) return false;
+  // Gate 2: binario resoluble en PATH (cacheado).
   const cached = availabilityCache.get(c);
   if (cached !== undefined) return cached;
   const ok = binaryOnPath(CLI_BINARY[c]);
