@@ -118,12 +118,29 @@ def _obtain_board_token(state: dict) -> str:
     board_token = ch["boardApiToken"]
     poll_path = ch["pollPath"] if ch["pollPath"].startswith("/api") else "/api" + ch["pollPath"]
 
+    # Si Paperclip corre en una VM/host remoto, el usuario accede por la IP, no
+    # por localhost (localhost desde otra máquina apunta a OTRA cosa). Mostramos
+    # las URLs con las IPs no-loopback del host además de localhost.
+    host_ips: list[str] = []
+    try:
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5).stdout
+        host_ips = [ip for ip in out.split() if ip.count(".") == 3 and not ip.startswith("127.")]
+    except Exception:
+        pass
+
     info("")
     info("Paperclip needs a one-time browser approval:")
-    info(f"  1. Open {PAPERCLIP_URL}  and sign up / sign in")
+    if host_ips:
+        info("  *** Si accedés desde otra máquina (p.ej. una VM), usá la IP, NO localhost ***")
+    info(f"  1. Sign up / sign in:")
+    info(f"       {PAPERCLIP_URL}")
+    for ip in host_ips:
+        info(f"       http://{ip}:3100   <- usá esta si entrás de afuera")
     info("     (the FIRST user of this instance becomes its admin)")
-    info(f"  2. Then open: {approval_url}")
-    info("     and click **Approve**.")
+    info(f"  2. Then open and click **Approve**:")
+    info(f"       {approval_url}")
+    for ip in host_ips:
+        info(f"       {approval_url.replace('localhost', ip)}   <- usá esta si entrás de afuera")
     info("")
     info(f"Waiting for approval (up to {CHALLENGE_TIMEOUT_S // 60} min)…")
 
