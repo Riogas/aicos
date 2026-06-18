@@ -64,6 +64,18 @@ def write_infra_env(state: dict, repo: Path) -> None:
     onboarding."""
     infra_env = repo / "infra" / ".env"
     prev_infra = _load_env(infra_env)
+    # Hostnames permitidos para la UI de Paperclip (modo private). Incluimos
+    # localhost + todas las IPv4 del host, así si entrás por la IP privada de
+    # una VM (p.ej. 192.168.56.50) no te bloquea. Preserva un valor previo.
+    host_ips = []
+    try:
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5).stdout
+        host_ips = [ip for ip in out.split() if ip.count(".") == 3]
+    except Exception:
+        pass
+    allowed_hosts = prev_infra.get("AICOS_ALLOWED_HOSTNAMES") or ",".join(
+        dict.fromkeys(["localhost", "127.0.0.1", *host_ips])
+    )
     # NUNCA rotar el password de un Postgres ya inicializado: el volumen
     # conserva el password de initdb y el resto del stack quedaría afuera.
     db_pwd = state.get("postgres_password") or prev_infra.get("POSTGRES_PASSWORD") or secrets.token_urlsafe(20)
@@ -78,6 +90,7 @@ def write_infra_env(state: dict, repo: Path) -> None:
         "POSTGRES_DB":            prev_infra.get("POSTGRES_DB") or "aicos",
         "POSTGRES_EXTRA_DBS":     "paperclip",
         "PAPERCLIP_AUTH_SECRET":  auth_secret,
+        "AICOS_ALLOWED_HOSTNAMES": allowed_hosts,
         # Dashboard reads Paperclip directly for the live tactical view.
         "PAPERCLIP_API_KEY":      state.get("paperclip_api_key") or prev_infra.get("PAPERCLIP_API_KEY", ""),
         "AICOS_COMPANY_ID":       state.get("company_id") or prev_infra.get("AICOS_COMPANY_ID", ""),

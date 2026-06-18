@@ -87,6 +87,10 @@ services:
       PAPERCLIP_CONFIG: /paperclip/instances/default/config.json
       PAPERCLIP_DEPLOYMENT_MODE: authenticated
       PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+      # Hostnames permitidos para acceder a la UI (modo private). El installer
+      # escribe AICOS_ALLOWED_HOSTNAMES en infra/.env con localhost + todas las
+      # IPs del host (así una VM accedida por su IP privada no queda bloqueada).
+      PAPERCLIP_ALLOWED_HOSTNAMES: ${AICOS_ALLOWED_HOSTNAMES:-localhost,127.0.0.1}
       # AICOS R5 patch: allow agents of the same company to comment/patch each
       # other's issues. Multi-tenant cross-company stays blocked.
       PAPERCLIP_ALLOW_INTRA_COMPANY_AGENT_MUTATIONS: "true"
