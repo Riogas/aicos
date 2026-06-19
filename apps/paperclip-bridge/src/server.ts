@@ -20,6 +20,7 @@ import {
   retrieveAllScopes,
   type MemoryScope,
 } from "./memory.js";
+import { ingestDocument, listDocuments, deleteDocument } from "./knowledge.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
 import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
@@ -692,7 +693,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
 
   const MemorySearchSchema = z.object({
     query: z.string().min(1),
-    scope: z.enum(["agent", "project", "company", "market", "all"]).optional(),
+    scope: z.enum(["agent", "project", "company", "market", "knowledge", "all"]).optional(),
     registryId: z.string().optional(),
     projectId: z.string().optional(),
     limit: z.coerce.number().int().positive().max(20).optional(),
@@ -717,6 +718,35 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         limit: limit ?? 5,
       }),
     };
+  });
+
+  // ─── Base de conocimiento (RAG) ──────────────────────────────────────────
+  const KnowledgeIngestSchema = z.object({
+    title: z.string().min(1),
+    text: z.string().min(1),
+    source: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    docId: z.string().optional(),
+  });
+
+  app.post("/knowledge/ingest", async (req, reply) => {
+    const r = KnowledgeIngestSchema.safeParse(req.body);
+    if (!r.success) {
+      reply.code(400);
+      return { error: "validation", details: r.error.issues };
+    }
+    const res = await ingestDocument(r.data);
+    if (!res.ok) reply.code(422);
+    return res;
+  });
+
+  app.get("/knowledge/list", async () => {
+    return { documents: await listDocuments() };
+  });
+
+  app.delete("/knowledge/:docId", async (req) => {
+    const { docId } = req.params as { docId: string };
+    return await deleteDocument(decodeURIComponent(docId));
   });
 
   // ─── Daily standup del CEO ───────────────────────────────────────────────

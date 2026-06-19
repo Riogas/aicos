@@ -62,8 +62,9 @@ async function retrieveMemoryContext(query: string): Promise<string> {
     const res = await fetch(`${BRIDGE}/memory/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, scope: "company", limit: 5 }),
-      signal: AbortSignal.timeout(4000),
+      // "all" → incluye la base de conocimiento (RAG) + company + market.
+      body: JSON.stringify({ query, scope: "all", limit: 5 }),
+      signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return "";
     const d = (await res.json()) as { items?: { text?: string; summary?: string }[] };

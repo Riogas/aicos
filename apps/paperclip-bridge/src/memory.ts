@@ -24,16 +24,25 @@ const EMBED_URL = process.env.AICOS_EMBEDDINGS_URL || "";
 const EMBED_DIM = Number(process.env.AICOS_EMBEDDINGS_DIM) || (EMBED_URL ? 384 : 1536);
 const hasEmbedder = Boolean(EMBED_URL || OPENAI_KEY);
 
-export type MemoryScope = "agent" | "project" | "company" | "market";
+export type MemoryScope = "agent" | "project" | "company" | "market" | "knowledge";
 
 const COLLECTIONS: Record<MemoryScope, string> = {
   agent: process.env.AICOS_AGENT_MEMORY_COLLECTION ?? "aicos_agent_memory",
   project: process.env.AICOS_PROJECT_MEMORY_COLLECTION ?? "aicos_project_memory",
   company: process.env.AICOS_COMPANY_MEMORY_COLLECTION ?? "aicos_company_memory",
   market: process.env.AICOS_MARKET_MEMORY_COLLECTION ?? "aicos_market_memory",
+  // Base de conocimiento de la empresa (RAG sobre docs/manuales/wikis): chunks de
+  // documentos ingeridos. Pool global como company, pero gestionable por docId.
+  knowledge: process.env.AICOS_KNOWLEDGE_COLLECTION ?? "aicos_knowledge",
 };
 
 const collectionEnsured = new Map<MemoryScope, boolean>();
+
+/** Acceso crudo a Qdrant para el módulo de knowledge (list/delete por docId). */
+export function qdrantTarget(scope: MemoryScope): { url: string; collection: string } {
+  return { url: QDRANT_URL, collection: COLLECTIONS[scope] };
+}
+export const embedderReady = hasEmbedder;
 
 export interface MemoryEntry {
   scope: MemoryScope;
@@ -41,6 +50,9 @@ export interface MemoryEntry {
   ticketId?: string;
   ticketIdentifier?: string;
   projectId?: string;          // required for scope=project
+  docId?: string;              // scope=knowledge: id del documento fuente
+  chunkIndex?: number;         // scope=knowledge: índice del chunk dentro del doc
+  source?: string;             // scope=knowledge: origen (archivo/URL/título)
   text: string;
   summary?: string;
   tags?: string[];
@@ -52,6 +64,8 @@ export interface RetrievedMemory {
   ticketIdentifier?: string;
   projectId?: string;
   registryId?: string;
+  docId?: string;
+  source?: string;
   summary: string;
   ts: string;
   tags?: string[];
@@ -159,6 +173,9 @@ function dedupKeyFor(entry: MemoryEntry): string {
       return `${entry.registryId ?? "?"}:${entry.ticketId ?? entry.text.slice(0, 60)}`;
     case "project":
       return `${entry.projectId ?? "?"}:${entry.ticketId ?? entry.text.slice(0, 60)}`;
+    case "knowledge":
+      // Chunk de documento: dedupe estable por doc+chunk para re-ingestar limpio.
+      return `${entry.docId ?? "?"}:${entry.chunkIndex ?? entry.text.slice(0, 60)}`;
     case "company":
     case "market":
       // Company/Market entries dedupe by text content (semantic stability)
@@ -205,6 +222,9 @@ export async function storeMemory(entry: MemoryEntry): Promise<boolean> {
               ticketId: entry.ticketId,
               ticketIdentifier: entry.ticketIdentifier,
               projectId: entry.projectId,
+              docId: entry.docId,
+              chunkIndex: entry.chunkIndex,
+              source: entry.source,
               ts: new Date().toISOString(),
               text: entry.text.slice(0, 4000),
               summary,
@@ -282,6 +302,8 @@ export async function retrieveFromScope(
       ticketIdentifier: p.payload.ticketIdentifier as string | undefined,
       projectId: p.payload.projectId as string | undefined,
       registryId: p.payload.registryId as string | undefined,
+      docId: p.payload.docId as string | undefined,
+      source: p.payload.source as string | undefined,
       summary: (p.payload.summary as string) ?? (p.payload.text as string) ?? "",
       ts: (p.payload.ts as string) ?? "",
       tags: p.payload.tags as string[] | undefined,
@@ -314,6 +336,8 @@ export async function retrieveAllScopes(
   }
   tasks.push(retrieveFromScope("company", query, { limit }));
   tasks.push(retrieveFromScope("market", query, { limit }));
+  // Base de conocimiento: más chunks (es el punto de la RAG sobre docs).
+  tasks.push(retrieveFromScope("knowledge", query, { limit: Math.max(limit, 4) }));
   const results = await Promise.all(tasks);
   return results.flat().sort((a, b) => b.score - a.score);
 }
@@ -340,6 +364,7 @@ export function formatMemoriesForPrompt(memories: RetrievedMemory[]): string {
     project: [],
     company: [],
     market: [],
+    knowledge: [],
   };
   for (const m of memories) byScope[m.scope].push(m);
 
@@ -349,14 +374,15 @@ export function formatMemoriesForPrompt(memories: RetrievedMemory[]): string {
     project: "HISTORIA DEL PROYECTO (decisiones, arquitectura, gotchas)",
     company: "HECHOS DE LA EMPRESA (politicas, brand, restricciones)",
     market: "CONOCIMIENTO DEL MERCADO (competidores, tendencias)",
+    knowledge: "BASE DE CONOCIMIENTO (docs/manuales/wikis de la empresa)",
   };
 
-  for (const scope of ["project", "agent", "company", "market"] as MemoryScope[]) {
+  for (const scope of ["knowledge", "project", "agent", "company", "market"] as MemoryScope[]) {
     const items = byScope[scope];
     if (items.length === 0) continue;
     lines.push(`# MEMORIA · ${labels[scope]} (top ${items.length})`);
     for (const m of items) {
-      const head = m.ticketIdentifier ?? m.registryId ?? m.projectId ?? "?";
+      const head = m.source ?? m.ticketIdentifier ?? m.registryId ?? m.projectId ?? "?";
       lines.push(`## ${head} (score ${m.score.toFixed(2)}, ${m.ts.slice(0, 10)})`);
       lines.push(m.summary);
       lines.push("");
