@@ -22,12 +22,14 @@ interface AicosSpec {
   connectionsNeeded?: string[];
   tasks?: SpecTask[];
 }
+interface Attachment { path: string; name: string; type?: string; size?: number }
 interface Msg {
   id: number;
   role: "user" | "agent";
   text: string;
   spec?: AicosSpec;
   streaming?: boolean;
+  attachments?: Attachment[];
 }
 interface RosterAgent { id: string; name: string; department: string; color: string }
 interface ConvMeta { id: string; title: string; interlocutor: string; updatedAt: number }
@@ -42,6 +44,15 @@ interface ApplyResult {
 
 const PAPERCLIP_UI = (host: string) => `http://${host}:3100`;
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+
+function attIcon(type?: string): string {
+  const t = type || "";
+  if (t.startsWith("image/")) return "🖼";
+  if (t.startsWith("audio/")) return "🎵";
+  if (t.startsWith("video/")) return "🎬";
+  if (t.includes("pdf")) return "📄";
+  return "📎";
+}
 
 // ── extrae el bloque ```aicos-spec``` del texto del agente ────────────────────
 function extractSpec(text: string): { spec?: AicosSpec; clean: string } {
@@ -113,8 +124,11 @@ export function StudioClient() {
   const [repoPath, setRepoPath] = useState("");
   const [applying, setApplying] = useState(false);
   const [applyRes, setApplyRes] = useState<ApplyResult | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   // refs para persistir sin closures viejas
   const r = useRef({ messages, sessionId, convId, who, model, repoPath });
@@ -158,8 +172,25 @@ export function StudioClient() {
 
   const newConv = () => {
     setMessages([]); setSessionId(null); setApplyRes(null); setBusy(false);
+    setAttachments([]);
     setConvId(genId());
   };
+
+  const onFiles = useCallback(async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/studio/upload", { method: "POST", body: fd });
+        const d = (await res.json()) as { ok?: boolean; path?: string; name?: string; type?: string; size?: number; error?: string };
+        if (d?.ok && d.path) setAttachments((a) => [...a, { path: d.path!, name: d.name || file.name, type: d.type, size: d.size }]);
+      } catch { /* noop */ }
+    }
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = "";
+  }, []);
 
   const selectConv = async (id: string) => {
     if (busy || id === convId) return;
@@ -184,10 +215,11 @@ export function StudioClient() {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || busy) return;
-    setInput(""); setApplyRes(null);
+    const atts = attachments;
+    if ((!text && atts.length === 0) || busy || uploading) return;
+    setInput(""); setApplyRes(null); setAttachments([]);
     const base = r.current.messages;
-    const userMsg: Msg = { id: ++idRef.current, role: "user", text };
+    const userMsg: Msg = { id: ++idRef.current, role: "user", text, attachments: atts.length ? atts : undefined };
     const agentMsg: Msg = { id: ++idRef.current, role: "agent", text: "", streaming: true };
     setMessages((m) => [...m, userMsg, agentMsg]);
     setBusy(true);
@@ -197,7 +229,7 @@ export function StudioClient() {
       const res = await fetch("/api/studio/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interlocutor: r.current.who, message: text, model: r.current.model, sessionId: localSession, repoPath: r.current.repoPath }),
+        body: JSON.stringify({ interlocutor: r.current.who, message: text || "Analizá los adjuntos.", model: r.current.model, sessionId: localSession, repoPath: r.current.repoPath, attachments: atts }),
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
@@ -234,7 +266,7 @@ export function StudioClient() {
     } finally {
       setBusy(false);
     }
-  }, [input, busy, persist]);
+  }, [input, busy, uploading, attachments, persist]);
 
   const applySpec = async (spec: AicosSpec) => {
     setApplying(true); setApplyRes(null);
@@ -310,22 +342,49 @@ export function StudioClient() {
                 <div className="sr-bubble">
                   {m.role === "agent" && <div className="sr-who">{who === "ceo" ? "CEO" : "Hermes"}</div>}
                   <div className="sr-text"><Rich text={m.text || (m.streaming ? "…" : "")} /></div>
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div className="sr-msg-atts">
+                      {m.attachments.map((a) => (
+                        <span key={a.path} className="sr-att" title={a.name}>{attIcon(a.type)} <span className="sr-att-name">{a.name}</span></span>
+                      ))}
+                    </div>
+                  )}
                   {m.streaming && <span className="sr-cursor" />}
                   {m.spec && <div className="sr-spec-chip">✦ Spec generada — ver panel →</div>}
                 </div>
               </div>
             ))}
           </div>
-          <div className="sr-input">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder={busy ? "El agente está pensando…" : "Escribí tu mensaje… (Enter envía · Shift+Enter salto de línea)"}
-              rows={2}
-              disabled={busy}
-            />
-            <button className="sr-send" onClick={send} disabled={busy || !input.trim()}>{busy ? "…" : "Enviar"}</button>
+          <div className="sr-inputwrap">
+            {(attachments.length > 0 || uploading) && (
+              <div className="sr-atts">
+                {attachments.map((a, i) => (
+                  <span key={a.path} className="sr-att" title={a.name}>
+                    {attIcon(a.type)} <span className="sr-att-name">{a.name}</span>
+                    <button className="sr-att-x" title="Quitar" onClick={() => setAttachments((x) => x.filter((_, j) => j !== i))}>×</button>
+                  </span>
+                ))}
+                {uploading && <span className="sr-att up">subiendo…</span>}
+              </div>
+            )}
+            <div className="sr-input">
+              <button
+                className="sr-attach"
+                title="Adjuntar evidencia (imagen, audio, video, archivo)"
+                onClick={() => fileRef.current?.click()}
+                disabled={busy || uploading}
+              >📎</button>
+              <input ref={fileRef} type="file" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+                placeholder={busy ? "El agente está pensando…" : "Escribí tu mensaje… (Enter envía · Shift+Enter salto de línea)"}
+                rows={2}
+                disabled={busy}
+              />
+              <button className="sr-send" onClick={send} disabled={busy || uploading || (!input.trim() && attachments.length === 0)}>{busy ? "…" : "Enviar"}</button>
+            </div>
           </div>
         </div>
 

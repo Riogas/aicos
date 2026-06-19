@@ -103,14 +103,33 @@ function storeStrategyMemory(who: string, userMsg: string, agentText: string): v
 }
 
 export async function POST(req: Request) {
-  let body: { interlocutor?: string; message?: string; sessionId?: string; model?: string; repoPath?: string };
+  let body: {
+    interlocutor?: string; message?: string; sessionId?: string; model?: string; repoPath?: string;
+    attachments?: { path?: string; name?: string; type?: string }[];
+  };
   try {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: "invalid body" }), { status: 400 });
   }
   const who = (body.interlocutor === "ceo" ? "ceo" : "hermes") as Interlocutor;
-  const message = (body.message || "").trim();
+  let message = (body.message || "").trim();
+  // Adjuntos (evidencia subida en la Strategy Room): los referenciamos por path
+  // para que el agente los lea con su tool Read (imágenes → visión, PDF/texto →
+  // contenido). Sólo aceptamos paths dentro del dir de uploads del home montado.
+  const uploadsDir = `${HOST_HOME}/.local/share/aicos/uploads/`;
+  const attachments = (body.attachments || []).filter(
+    (a) => a && typeof a.path === "string" && a.path.startsWith(uploadsDir) && existsSync(a.path),
+  );
+  if (attachments.length) {
+    const lines = attachments
+      .map((a) => `- ${a.name || "adjunto"}${a.type ? ` (${a.type})` : ""}: ${a.path}`)
+      .join("\n");
+    message +=
+      `\n\n[Adjuntos subidos por el operador como evidencia — leelos con tu tool Read ` +
+      `(imágenes → analizalas con visión; PDF/texto → su contenido). Si son audio/video y no podés ` +
+      `procesarlos directamente, indicá que quedan adjuntos como evidencia):\n${lines}\n]`;
+  }
   if (!message) {
     return new Response(JSON.stringify({ error: "missing message" }), { status: 400 });
   }
