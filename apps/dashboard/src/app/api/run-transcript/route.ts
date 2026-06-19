@@ -16,6 +16,12 @@ function parseClaudeEvents(stdout: string, out: Entry[]) {
     if (!line || line[0] !== "{") continue;
     let ev: any;
     try { ev = JSON.parse(line); } catch { continue; }
+    // Chunks granulares que el bridge persiste ({aicos:"chunk", kind, text}).
+    if (ev.aicos === "chunk") {
+      const k = ev.kind === "tool" ? "tool" : ev.kind === "thinking" ? "thinking" : "text";
+      if (typeof ev.text === "string" && ev.text.trim()) out.push({ kind: k, text: ev.text });
+      continue;
+    }
     if (ev.type === "assistant") {
       for (const p of ev.message?.content ?? []) {
         if (p.type === "text" && p.text?.trim()) out.push({ kind: "text", text: p.text });

@@ -443,7 +443,15 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         model: chosen.model,
         prompt: directPrompt,
         cwd: input.workspace?.cwd,
-        onChunk: input.onOutput,
+        onChunk: (chunk) => {
+          // Persistir el transcript granular: cada chunk del agente (texto, tool,
+          // razonamiento) al stdout del bridge → Paperclip lo guarda en el
+          // run-log → la UI (Runs → transcript completo) lo muestra.
+          try {
+            process.stdout.write(JSON.stringify({ aicos: "chunk", kind: chunk.kind, text: chunk.text }) + "\n");
+          } catch { /* noop */ }
+          input.onOutput?.(chunk);
+        },
       });
       const attemptDuration = Date.now() - t0;
 
