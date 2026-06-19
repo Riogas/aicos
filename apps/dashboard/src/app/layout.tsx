@@ -6,6 +6,7 @@ import { GeistMono } from "geist/font/mono";
 import {
   Activity,
   CalendarClock,
+  FolderGit2,
   Gauge,
   MessagesSquare,
   Sparkles,
@@ -28,6 +29,7 @@ const NAV = [
   { href: "/flow", label: "Flow", icon: Workflow },
   { href: "/studio", label: "Strategy Room", icon: MessagesSquare },
   { href: "/control", label: "Control", icon: ShieldAlert },
+  { href: "/repos", label: "Repos", icon: FolderGit2 },
   { href: "/quota", label: "Quota", icon: Gauge },
   { href: "/learning", label: "Learning", icon: Sparkles },
   { href: "/policy", label: "Policy", icon: Shield },

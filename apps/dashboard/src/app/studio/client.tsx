@@ -109,14 +109,16 @@ export function StudioClient() {
   const [convId, setConvId] = useState<string>(genId());
   const [convs, setConvs] = useState<ConvMeta[]>([]);
   const [roster, setRoster] = useState<Record<string, RosterAgent>>({});
+  const [repos, setRepos] = useState<{ name: string; path: string }[]>([]);
+  const [repoPath, setRepoPath] = useState("");
   const [applying, setApplying] = useState(false);
   const [applyRes, setApplyRes] = useState<ApplyResult | null>(null);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // refs para persistir sin closures viejas
-  const r = useRef({ messages, sessionId, convId, who, model });
-  useEffect(() => { r.current = { messages, sessionId, convId, who, model }; }, [messages, sessionId, convId, who, model]);
+  const r = useRef({ messages, sessionId, convId, who, model, repoPath });
+  useEffect(() => { r.current = { messages, sessionId, convId, who, model, repoPath }; }, [messages, sessionId, convId, who, model, repoPath]);
 
   const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
 
@@ -130,6 +132,7 @@ export function StudioClient() {
       for (const a of d.agents || []) m[a.id] = a;
       setRoster(m);
     }).catch(() => {});
+    fetch("/api/repos").then((x) => x.json()).then((d: { repos: { name: string; path: string }[] }) => setRepos(d.repos || [])).catch(() => {});
     loadConvs();
   }, [loadConvs]);
 
@@ -194,7 +197,7 @@ export function StudioClient() {
       const res = await fetch("/api/studio/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interlocutor: r.current.who, message: text, model: r.current.model, sessionId: localSession }),
+        body: JSON.stringify({ interlocutor: r.current.who, message: text, model: r.current.model, sessionId: localSession, repoPath: r.current.repoPath }),
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
@@ -262,6 +265,12 @@ export function StudioClient() {
         <div className="sr-controls">
           <Seg<Who> value={who} onChange={(v) => { setWho(v); newConv(); }} options={[{ k: "ceo", label: "CEO" }, { k: "hermes", label: "Hermes" }]} disabled={busy} />
           <Seg<ModelKey> value={model} onChange={setModel} options={[{ k: "opus", label: "Opus 4.8" }, { k: "sonnet", label: "Sonnet 4.6" }]} disabled={busy} />
+          {repos.length > 0 && (
+            <select className="sr-reposel" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} disabled={busy} title="Repo de contexto — el agente lo lee">
+              <option value="">📁 sin repo</option>
+              {repos.map((rp) => <option key={rp.path} value={rp.path}>📁 {rp.name}</option>)}
+            </select>
+          )}
         </div>
       </div>
 

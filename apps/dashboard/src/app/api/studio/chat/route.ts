@@ -15,6 +15,22 @@
  */
 import { spawn } from "node:child_process";
 import { buildSystemPrompt, loadRoster, type Interlocutor } from "@/lib/studio-prompt";
+import { scanRepos, getConfig, isUnderRoot } from "@/lib/repos";
+
+/** Lista de repos disponibles + el seleccionado, para el system prompt del CEO. */
+function buildRepoContext(selectedPath?: string): string {
+  let repos: { name: string; path: string; kind: string; description?: string }[] = [];
+  try { repos = scanRepos(getConfig().root); } catch { return ""; }
+  if (!repos.length) return "";
+  let s =
+    "\n\n# Repos/apps disponibles (podés leerlos con tus tools Read/Grep/Glob)\n" +
+    repos.map((r) => `- **${r.name}** (${r.kind}) — \`${r.path}\`${r.description ? `: ${r.description}` : ""}`).join("\n");
+  const sel = selectedPath ? repos.find((r) => r.path === selectedPath) : undefined;
+  if (sel) {
+    s += `\n\n**El operador está trabajando sobre el repo \`${sel.name}\` (${sel.path}). Estás parado en su raíz: revisá el código real con tus tools antes de especificar nada.**`;
+  }
+  return s;
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -85,7 +101,7 @@ function storeStrategyMemory(who: string, userMsg: string, agentText: string): v
 }
 
 export async function POST(req: Request) {
-  let body: { interlocutor?: string; message?: string; sessionId?: string; model?: string };
+  let body: { interlocutor?: string; message?: string; sessionId?: string; model?: string; repoPath?: string };
   try {
     body = await req.json();
   } catch {
@@ -97,13 +113,16 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: "missing message" }), { status: 400 });
   }
   const sessionId = body.sessionId?.trim();
+  // Si el operador eligió un repo, el agente se para en su raíz (lee ese repo).
+  const repoPath = body.repoPath?.trim();
+  const cwd = repoPath && isUnderRoot(repoPath) ? repoPath : CAN_READ_REPO ? REPO : HOST_HOME;
 
   const args = [
     "exec", "-i",
     "-u", AGENT_UID,
     "-e", `HOME=${HOST_HOME}`,
     "-e", "IS_SANDBOX=1",
-    "-w", CAN_READ_REPO ? REPO : HOST_HOME,
+    "-w", cwd,
     CONTAINER,
     "claude", "-p", message,
     "--output-format", "stream-json",
@@ -116,7 +135,8 @@ export async function POST(req: Request) {
   } else {
     const roster = loadRoster();
     const memCtx = await retrieveMemoryContext(message);
-    args.push("--append-system-prompt", buildSystemPrompt(who, roster, CAN_READ_REPO) + memCtx);
+    const repoCtx = buildRepoContext(repoPath);
+    args.push("--append-system-prompt", buildSystemPrompt(who, roster, CAN_READ_REPO) + repoCtx + memCtx);
   }
 
   const encoder = new TextEncoder();
