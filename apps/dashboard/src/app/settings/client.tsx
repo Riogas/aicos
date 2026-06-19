@@ -17,13 +17,34 @@ export function SettingsClient() {
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [userPairs, setUserPairs] = useState<{ u: string; c: string }[]>([]);
+  // standup
+  const [su, setSu] = useState<{ enabled: boolean; time: string } | null>(null);
+  const [suLast, setSuLast] = useState<{ at: string; text: string } | null>(null);
+  const [suBusy, setSuBusy] = useState(false);
 
   useEffect(() => {
     fetch("/api/notifications/config").then((r) => r.json()).then((d: Cfg) => {
       setCfg(d);
       setUserPairs(Object.entries(d.users || {}).map(([u, c]) => ({ u, c })));
     }).catch(() => {});
+    fetch("/api/standup").then((r) => r.json()).then((d) => { setSu(d.config); setSuLast(d.last); }).catch(() => {});
   }, []);
+
+  const saveStandup = async (patch: Partial<{ enabled: boolean; time: string }>) => {
+    const next = { ...(su || { enabled: false, time: "18:00" }), ...patch };
+    setSu(next);
+    await fetch("/api/standup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) }).catch(() => {});
+  };
+  const runStandup = async () => {
+    setSuBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/standup/run", { method: "POST" });
+      const d = await r.json();
+      if (d.ok) { setSuLast({ at: new Date().toISOString(), text: d.text }); setMsg({ ok: true, text: "Standup enviado." }); }
+      else setMsg({ ok: false, text: d.error || "falló" });
+    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+    finally { setSuBusy(false); }
+  };
 
   if (!cfg) return <div className="text-muted">Cargando…</div>;
 
@@ -112,6 +133,34 @@ export function SettingsClient() {
           <button onClick={test} disabled={testing || !cfg.hasToken} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted hover:text-fg disabled:opacity-40">{testing ? "Enviando…" : "Enviar prueba"}</button>
           {msg && <span className={`text-sm ${msg.ok ? "text-success" : "text-danger"}`}>{msg.text}</span>}
         </div>
+      </section>
+
+      {/* Daily standup */}
+      <section className="mt-6 rounded-xl border border-border bg-surface/40 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-fg">Daily standup del CEO</h2>
+            <p className="mt-1 text-xs text-subtle">Resumen diario de lo trabajado (completadas/en curso/bloqueadas), por Telegram.</p>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={su?.enabled || false} onChange={(e) => saveStandup({ enabled: e.target.checked })} />
+            <span className={su?.enabled ? "text-success" : "text-subtle"}>{su?.enabled ? "Activado" : "Desactivado"}</span>
+          </label>
+        </div>
+        <div className="mt-5 flex flex-wrap items-end gap-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted">Hora</label>
+            <input type="time" className={inp + " w-auto"} value={su?.time || "18:00"} onChange={(e) => saveStandup({ time: e.target.value })} />
+          </div>
+          <button onClick={runStandup} disabled={suBusy} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted hover:text-fg disabled:opacity-40">{suBusy ? "Generando…" : "Enviar ahora"}</button>
+          <span className="text-xs text-subtle">Usa el bot configurado arriba.</span>
+        </div>
+        {suLast && (
+          <div className="mt-5">
+            <div className="mb-1 font-mono text-2xs uppercase tracking-tightest text-subtle">último standup · {new Date(suLast.at).toLocaleString("es-UY")}</div>
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border/60 bg-bg/60 p-3 text-xs leading-relaxed text-fg/90">{suLast.text}</pre>
+          </div>
+        )}
       </section>
     </div>
   );

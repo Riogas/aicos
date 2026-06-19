@@ -13,6 +13,7 @@ import type { ProjectWorkspace } from "./registry.js";
 import { createQuotaClient } from "./quota-client.js";
 import { createLearningClient } from "./learning-client.js";
 import { createPolicyClient } from "./policy-client.js";
+import { runStandup, lastStandup } from "./standup.js";
 import {
   storeMemory,
   retrieveFromScope,
@@ -716,6 +717,14 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         limit: limit ?? 5,
       }),
     };
+  });
+
+  // ─── Daily standup del CEO ───────────────────────────────────────────────
+  app.post("/standup/run", async () => {
+    return await runStandup(true);
+  });
+  app.get("/standup/last", async () => {
+    return { last: lastStandup() };
   });
 
 

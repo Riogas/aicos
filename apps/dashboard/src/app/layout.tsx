@@ -6,6 +6,7 @@ import { GeistMono } from "geist/font/mono";
 import {
   Activity,
   CalendarClock,
+  ChevronDown,
   FolderGit2,
   Gauge,
   MessagesSquare,
@@ -30,14 +31,25 @@ const NAV = [
   { href: "/flow", label: "Flow", icon: Workflow },
   { href: "/studio", label: "Strategy Room", icon: MessagesSquare },
   { href: "/control", label: "Control", icon: ShieldAlert },
-  { href: "/repos", label: "Repos", icon: FolderGit2 },
-  { href: "/mcp", label: "Conectores", icon: Plug },
-  { href: "/quota", label: "Quota", icon: Gauge },
-  { href: "/learning", label: "Learning", icon: Sparkles },
-  { href: "/policy", label: "Policy", icon: Shield },
   { href: "/runs", label: "Runs", icon: Terminal },
   { href: "/schedules", label: "Programadas", icon: CalendarClock },
-  { href: "/settings", label: "Ajustes", icon: Settings },
+];
+
+const NAV_GROUPS = [
+  {
+    label: "Métricas", icon: Gauge, items: [
+      { href: "/quota", label: "Quota", icon: Gauge },
+      { href: "/learning", label: "Learning", icon: Sparkles },
+      { href: "/policy", label: "Policy", icon: Shield },
+    ],
+  },
+  {
+    label: "Sistema", icon: Settings, items: [
+      { href: "/repos", label: "Repos", icon: FolderGit2 },
+      { href: "/mcp", label: "Conectores", icon: Plug },
+      { href: "/settings", label: "Ajustes", icon: Settings },
+    ],
+  },
 ];
 
 async function HeaderStatus() {
@@ -97,11 +109,34 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="group flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surface hover:text-fg"
+                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surface hover:text-fg"
                 >
                   <item.icon className="h-3.5 w-3.5" strokeWidth={2} />
                   <span>{item.label}</span>
                 </Link>
+              ))}
+              {NAV_GROUPS.map((g) => (
+                <div key={g.label} className="group relative">
+                  <button className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surface hover:text-fg">
+                    <g.icon className="h-3.5 w-3.5" strokeWidth={2} />
+                    <span>{g.label}</span>
+                    <ChevronDown className="h-3 w-3 opacity-60" strokeWidth={2} />
+                  </button>
+                  <div className="invisible absolute left-0 top-full z-50 min-w-[170px] pt-1 opacity-0 transition-all group-hover:visible group-hover:opacity-100">
+                    <div className="rounded-lg border border-border bg-bg/95 p-1 shadow-xl backdrop-blur-xl">
+                      {g.items.map((it) => (
+                        <Link
+                          key={it.href}
+                          href={it.href}
+                          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface hover:text-fg"
+                        >
+                          <it.icon className="h-3.5 w-3.5" strokeWidth={2} />
+                          <span>{it.label}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               ))}
             </nav>
             <div className="ml-auto flex items-center gap-3">
