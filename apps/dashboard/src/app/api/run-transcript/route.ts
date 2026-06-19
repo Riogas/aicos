@@ -55,8 +55,10 @@ export async function GET(req: Request) {
     cache: "no-store",
     signal: AbortSignal.timeout(12000),
   });
-  const logText = await logRes.text();
   if (!logRes.ok) return Response.json({ error: `log no disponible (HTTP ${logRes.status})` }, { status: 502 });
+  // El endpoint devuelve { runId, store, logRef, content } — content es el NDJSON.
+  const logWrap = (await logRes.json().catch(() => null)) as { content?: string } | null;
+  const logText = logWrap?.content ?? "";
 
   // 4) parsear NDJSON {ts, stream, chunk}
   const stdoutBuf: string[] = [];
