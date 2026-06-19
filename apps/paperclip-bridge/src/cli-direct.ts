@@ -6,6 +6,10 @@ export type SupportedCli = "claude" | "codex" | "agy" | "opencode" | "hermes";
 
 const SUPPORTED_CLIS: readonly SupportedCli[] = ["claude", "codex", "agy", "opencode", "hermes"];
 
+// Config de MCP (conectores/tools) en formato Claude Code, generada por el
+// dashboard (apartado MCP). Si existe, claude la carga.
+const MCP_CONFIG = process.env.AICOS_MCP_CONFIG || join(process.env.HOME || "/home/vagrant", ".config", "aicos", "claude-mcp.json");
+
 /** Nombre del binario en disco para cada CLI (hoy 1:1 con el id). */
 const CLI_BINARY: Record<SupportedCli, string> = {
   claude: "claude",
@@ -133,6 +137,7 @@ function buildArgs(opts: CliInvocationOptions): string[] {
       ];
       const alias = claudeModelAlias(opts.model);
       if (alias) args.push("--model", alias);
+      if (existsSync(MCP_CONFIG)) args.push("--mcp-config", MCP_CONFIG);
       return args;
     }
     case "codex": {

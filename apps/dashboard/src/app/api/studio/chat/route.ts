@@ -14,6 +14,7 @@
  *   {"type":"error","error":"..."}
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { buildSystemPrompt, loadRoster, type Interlocutor } from "@/lib/studio-prompt";
 import { scanRepos, getConfig, isUnderRoot } from "@/lib/repos";
 
@@ -40,6 +41,7 @@ const AGENT_UID = process.env.AICOS_AGENT_UID || "1000:1000";
 const HOST_HOME = process.env.AICOS_HOST_HOME || process.env.HOME || "/home/vagrant";
 const REPO = process.env.AICOS_ROOT || `${HOST_HOME}/aicos`;
 const CAN_READ_REPO = process.env.STUDIO_REPO_ACCESS !== "0"; // default ON
+const MCP_CONFIG = process.env.AICOS_MCP_CONFIG || `${HOST_HOME}/.config/aicos/claude-mcp.json`;
 
 function modelAlias(m: string | undefined): string {
   const s = (m || "").toLowerCase();
@@ -130,6 +132,7 @@ export async function POST(req: Request) {
     "--model", modelAlias(body.model),
     "--dangerously-skip-permissions",
   ];
+  if (existsSync(MCP_CONFIG)) args.push("--mcp-config", MCP_CONFIG);
   if (sessionId) {
     args.push("--resume", sessionId);
   } else {
