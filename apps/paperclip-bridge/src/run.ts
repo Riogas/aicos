@@ -17,6 +17,7 @@ import type { LearningClient } from "./learning-client.js";
 import type { InFlightTracker } from "./in-flight-tracker.js";
 import type { PolicyClient } from "./policy-client.js";
 import type { Disposition } from "./retry-manager.js";
+import { runTestGate } from "./test-gate.js";
 
 interface CommitResult {
   attempted: boolean;
@@ -564,6 +565,29 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
   }
 
   const durationMs = Date.now() - start;
+
+  // ── Gate de tests (#9) ────────────────────────────────────────────────────
+  // Si el agente terminó OK y hay workspace, corremos los tests del proyecto
+  // ANTES de registrar éxito / commitear / marcar done. Si fallan, el run pasa a
+  // fallido: no se commitea código roto, el ticket se bloquea y reintenta.
+  let testReport = "";
+  if (exitCode === 0 && input.workspace) {
+    try {
+      const gate = await runTestGate(input.workspace.cwd, input.workspace.projectName);
+      if (gate.ran && !gate.passed) {
+        process.stderr.write(
+          `[test-gate] FAILED (${gate.command}) exit=${gate.exitCode}${gate.timedOut ? " timeout" : ""} in ${input.workspace.cwd}\n`,
+        );
+        exitCode = gate.exitCode || 1;
+        testReport = `Tests fallaron (\`${gate.command}\`, exit ${gate.exitCode}${gate.timedOut ? ", timeout" : ""}):\n${gate.output}`;
+        stderr = `${testReport}\n\n${stderr}`;
+      } else if (gate.ran) {
+        process.stderr.write(`[test-gate] passed (${gate.command}) in ${input.workspace.cwd}\n`);
+      }
+    } catch (e) {
+      process.stderr.write(`[test-gate] error: ${(e as Error).message}\n`);
+    }
+  }
 
   // Quota record (R3 + R3.5): registramos uso real con cost/tokens parseados
   // del structured output del CLI. Si el CLI no emite cost (codex/agy o

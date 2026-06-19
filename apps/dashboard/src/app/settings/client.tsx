@@ -21,6 +21,9 @@ export function SettingsClient() {
   const [su, setSu] = useState<{ enabled: boolean; time: string } | null>(null);
   const [suLast, setSuLast] = useState<{ at: string; text: string } | null>(null);
   const [suBusy, setSuBusy] = useState(false);
+  // test gate (#9)
+  const [tg, setTg] = useState<{ enabled: boolean; command?: string; timeoutSec: number } | null>(null);
+  const [tgBusy, setTgBusy] = useState(false);
 
   useEffect(() => {
     fetch("/api/notifications/config").then((r) => r.json()).then((d: Cfg) => {
@@ -28,7 +31,15 @@ export function SettingsClient() {
       setUserPairs(Object.entries(d.users || {}).map(([u, c]) => ({ u, c })));
     }).catch(() => {});
     fetch("/api/standup").then((r) => r.json()).then((d) => { setSu(d.config); setSuLast(d.last); }).catch(() => {});
+    fetch("/api/test-gate").then((r) => r.json()).then((d) => setTg(d.config)).catch(() => {});
   }, []);
+
+  const saveTestGate = async (patch: Partial<{ enabled: boolean; command: string; timeoutSec: number }>) => {
+    const next = { ...(tg || { enabled: true, timeoutSec: 300 }), ...patch };
+    setTg(next); setTgBusy(true);
+    try { await fetch("/api/test-gate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) }); }
+    finally { setTgBusy(false); }
+  };
 
   const saveStandup = async (patch: Partial<{ enabled: boolean; time: string }>) => {
     const next = { ...(su || { enabled: false, time: "18:00" }), ...patch };
@@ -161,6 +172,33 @@ export function SettingsClient() {
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border/60 bg-bg/60 p-3 text-xs leading-relaxed text-fg/90">{suLast.text}</pre>
           </div>
         )}
+      </section>
+
+      {/* Gate de tests (#9) */}
+      <section className="mt-6 rounded-xl border border-border bg-surface/40 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-fg">Gate de tests</h2>
+            <p className="mt-1 text-xs text-subtle">Antes de dar un ticket por completado, corre los tests del proyecto. Si fallan, no se commitea, se bloquea y reintenta.</p>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={tg?.enabled ?? true} onChange={(e) => saveTestGate({ enabled: e.target.checked })} />
+            <span className={tg?.enabled ? "text-success" : "text-subtle"}>{tg?.enabled ? "Activado" : "Desactivado"}</span>
+          </label>
+        </div>
+        <div className="mt-5 space-y-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted">Comando (opcional)</label>
+            <input className={inp} placeholder="auto: npm test / make test — o forzá uno (ej: pnpm test)" defaultValue={tg?.command || ""}
+              onBlur={(e) => saveTestGate({ command: e.target.value })} />
+            <p className="mt-1 text-2xs text-subtle">Si lo dejás vacío, autodetecta: <code>npm test</code> (si hay script real) o <code>make test</code>. Vacío y sin detección = se saltea ese proyecto.</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted">Timeout (segundos)</label>
+            <input type="number" min={10} max={1800} className={inp + " w-32"} value={tg?.timeoutSec ?? 300} onChange={(e) => saveTestGate({ timeoutSec: Math.max(10, Math.min(1800, Number(e.target.value) || 300)) })} />
+          </div>
+          {tgBusy && <span className="text-2xs text-subtle">guardando…</span>}
+        </div>
       </section>
     </div>
   );

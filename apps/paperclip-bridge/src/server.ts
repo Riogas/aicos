@@ -30,6 +30,7 @@ import {
   type Disposition,
 } from "./retry-manager.js";
 import { agingScan, loadAgingConfig, saveAgingConfig } from "./aging.js";
+import { loadTestGateConfig, saveTestGateConfig } from "./test-gate.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
 import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
@@ -792,6 +793,10 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   app.get("/aging/config", async () => ({ config: loadAgingConfig() }));
   app.post("/aging/config", async (req) => ({ config: saveAgingConfig((req.body ?? {}) as Parameters<typeof saveAgingConfig>[0]) }));
   app.get("/aging/scan", async () => await agingScan());
+
+  // ─── Gate de tests (#9) ──────────────────────────────────────────────────
+  app.get("/test-gate/config", async () => ({ config: loadTestGateConfig() }));
+  app.post("/test-gate/config", async (req) => ({ config: saveTestGateConfig((req.body ?? {}) as Parameters<typeof saveTestGateConfig>[0]) }));
 
   // ─── Daily standup del CEO ───────────────────────────────────────────────
   app.post("/standup/run", async () => {
