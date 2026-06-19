@@ -29,6 +29,7 @@ import {
   clearRetry,
   type Disposition,
 } from "./retry-manager.js";
+import { agingScan, loadAgingConfig, saveAgingConfig } from "./aging.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
 import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
@@ -786,6 +787,11 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
     const { issueId } = req.params as { issueId: string };
     return { ok: clearRetry(decodeURIComponent(issueId)) };
   });
+
+  // ─── Aging de tickets trabados (#8) ──────────────────────────────────────
+  app.get("/aging/config", async () => ({ config: loadAgingConfig() }));
+  app.post("/aging/config", async (req) => ({ config: saveAgingConfig((req.body ?? {}) as Parameters<typeof saveAgingConfig>[0]) }));
+  app.get("/aging/scan", async () => await agingScan());
 
   // ─── Daily standup del CEO ───────────────────────────────────────────────
   app.post("/standup/run", async () => {

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-interface Issue { id: string; identifier: string; title: string; status: string; assignee: string }
+interface Issue { id: string; identifier: string; title: string; status: string; assignee: string; updatedAt?: string }
+interface AgingCfg { enabled: boolean; blockedHours: number; inProgressHours: number; hour: number; minute: number }
 interface State {
   blocked: Issue[];
   inProgress: Issue[];
@@ -17,6 +18,8 @@ export function ControlClient() {
   const [st, setSt] = useState<State | null>(null);
   const [retry, setRetry] = useState<RetryInfo | null>(null);
   const [cfg, setCfg] = useState<RetryCfg | null>(null);
+  const [aging, setAging] = useState<AgingCfg | null>(null);
+  const [agingDraft, setAgingDraft] = useState<AgingCfg | null>(null);
   const [busy, setBusy] = useState<string>(""); // id+action en curso
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -24,6 +27,7 @@ export function ControlClient() {
   const load = useCallback(() => {
     fetch("/api/control/state").then((r) => r.json()).then(setSt).catch(() => {});
     fetch("/api/retry").then((r) => r.json()).then((d: RetryInfo) => { setRetry(d); setCfg((c) => c ?? d.config); }).catch(() => {});
+    fetch("/api/aging").then((r) => r.json()).then((d: { config: AgingCfg }) => { setAging(d.config); setAgingDraft((c) => c ?? d.config); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -58,6 +62,18 @@ export function ControlClient() {
       const d = await r.json();
       setFlash(d.config ? { ok: true, text: "Config guardada ✓" } : { ok: false, text: d.error || "falló" });
       load();
+    } catch (e) { setFlash({ ok: false, text: (e as Error).message }); }
+    finally { setBusy(""); }
+  };
+
+  const saveAging = async () => {
+    if (!agingDraft) return;
+    setBusy("agingcfg"); setFlash(null);
+    try {
+      const r = await fetch("/api/aging", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(agingDraft) });
+      const d = await r.json();
+      setFlash(d.config ? { ok: true, text: "Aging guardado ✓" } : { ok: false, text: d.error || "falló" });
+      if (d.config) setAging(d.config);
     } catch (e) { setFlash({ ok: false, text: (e as Error).message }); }
     finally { setBusy(""); }
   };
@@ -178,6 +194,46 @@ export function ControlClient() {
         )}
       </section>
 
+      {/* Aging — alertas de tickets trabados */}
+      {agingDraft && (
+        <section className="mt-8 rounded-xl border border-border bg-surface/40 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-fg">Alertas de tickets trabados</h3>
+              <p className="mt-1 text-xs text-subtle">
+                {agingDraft.enabled
+                  ? `Aviso diario (${String(agingDraft.hour).padStart(2, "0")}:${String(agingDraft.minute).padStart(2, "0")}) por Telegram si hay tickets bloqueados > ${agingDraft.blockedHours}h o en ejecución > ${agingDraft.inProgressHours}h.`
+                  : "Desactivadas."}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                <input type="checkbox" checked={agingDraft.enabled} onChange={(e) => setAgingDraft({ ...agingDraft, enabled: e.target.checked })} />
+                activas
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                blocked &gt;
+                <input type="number" min={1} value={agingDraft.blockedHours} onChange={(e) => setAgingDraft({ ...agingDraft, blockedHours: Math.max(1, Number(e.target.value) || 1) })}
+                  className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-fg" />h
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                in-progress &gt;
+                <input type="number" min={1} value={agingDraft.inProgressHours} onChange={(e) => setAgingDraft({ ...agingDraft, inProgressHours: Math.max(1, Number(e.target.value) || 1) })}
+                  className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-fg" />h
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                hora
+                <input type="number" min={0} max={23} value={agingDraft.hour} onChange={(e) => setAgingDraft({ ...agingDraft, hour: Math.max(0, Math.min(23, Number(e.target.value) || 0)) })}
+                  className="w-14 rounded-md border border-border bg-surface px-2 py-1 text-fg" />
+              </label>
+              <button onClick={saveAging} disabled={busy === "agingcfg"} className="rounded-md border border-accent/40 px-3 py-1 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-40">
+                {busy === "agingcfg" ? "…" : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Blocked */}
       <section className="mt-8">
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-hud">Necesitan acción · {st.blocked.length}</h3>
@@ -186,7 +242,7 @@ export function ControlClient() {
         ) : (
           <div className="space-y-2">
             {st.blocked.map((i) => (
-              <Row key={i.id} i={i}>
+              <Row key={i.id} i={i} staleHours={aging?.blockedHours}>
                 <Btn onClick={() => ticketAction(i.id, "approve", "approve")} busy={busy === `${i.id}:approve`} tone="success">Aprobar</Btn>
                 <Btn onClick={() => ticketAction(i.id, "relaunch", "relaunch")} busy={busy === `${i.id}:relaunch`} tone="accent">Re-lanzar</Btn>
                 <Btn onClick={() => ticketAction(i.id, "reject", "reject", `Rechazar ${i.identifier}? (se cancela)`)} busy={busy === `${i.id}:reject`} tone="danger">Rechazar</Btn>
@@ -204,7 +260,7 @@ export function ControlClient() {
         ) : (
           <div className="space-y-2">
             {st.inProgress.map((i) => (
-              <Row key={i.id} i={i}>
+              <Row key={i.id} i={i} staleHours={aging?.inProgressHours}>
                 <span className="flex items-center gap-1.5 text-xs text-hud"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-hud" />corriendo</span>
                 <Btn onClick={() => ticketAction(i.id, "reject", "reject", `Cancelar ${i.identifier}?`)} busy={busy === `${i.id}:reject`} tone="danger">Cancelar</Btn>
               </Row>
@@ -216,11 +272,28 @@ export function ControlClient() {
   );
 }
 
-function Row({ i, children }: { i: Issue; children: React.ReactNode }) {
+function ageHours(updatedAt?: string): number | null {
+  if (!updatedAt) return null;
+  const t = Date.parse(updatedAt);
+  if (Number.isNaN(t)) return null;
+  return (Date.now() - t) / 3_600_000;
+}
+function fmtAge(h: number): string {
+  return h >= 48 ? `${Math.round(h / 24)}d` : h >= 1 ? `${Math.round(h)}h` : `${Math.round(h * 60)}m`;
+}
+
+function Row({ i, children, staleHours }: { i: Issue; children: React.ReactNode; staleHours?: number }) {
+  const h = ageHours(i.updatedAt);
+  const stale = h !== null && staleHours !== undefined && h >= staleHours;
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface/40 px-4 py-3">
+    <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 ${stale ? "border-warning/50 bg-warning-soft" : "border-border bg-surface/40"}`}>
       <span className="font-mono text-xs text-subtle">{i.identifier}</span>
       <span className="flex-1 truncate text-sm text-fg">{i.title}</span>
+      {h !== null && (
+        <span className={`font-mono text-2xs ${stale ? "text-warning" : "text-subtle"}`} title={`sin avanzar hace ${fmtAge(h)}`}>
+          {stale ? "🕒 " : ""}{fmtAge(h)}
+        </span>
+      )}
       <span className="text-xs text-muted">{i.assignee}</span>
       <div className="flex items-center gap-2">{children}</div>
     </div>

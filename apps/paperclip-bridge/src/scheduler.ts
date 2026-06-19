@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { standupTick } from "./standup.js";
 import { processDueRetries } from "./retry-manager.js";
+import { agingTick } from "./aging.js";
 
 const HOME = process.env.HOME || "/home/vagrant";
 const SCHED_PATH = process.env.AICOS_SCHEDULES || join(HOME, ".config", "aicos", "schedules.json");
@@ -117,6 +118,7 @@ export function startScheduler(): void {
     const minuteKey = now.toISOString().slice(0, 16);
     void standupTick(now); // daily standup del CEO
     void processDueRetries(now.getTime()); // reintentos diferidos (#7)
+    void agingTick(now); // digest de tickets trabados (#8)
     for (const s of loadSchedules()) {
       if (!s.enabled || !s.cron || !s.prompt) continue;
       if (lastFired.get(s.id) === minuteKey) continue;
