@@ -8,6 +8,7 @@ import {
   Gauge,
   MessagesSquare,
   Sparkles,
+  Settings,
   Shield,
   Terminal,
   Workflow,
@@ -28,6 +29,7 @@ const NAV = [
   { href: "/learning", label: "Learning", icon: Sparkles },
   { href: "/policy", label: "Policy", icon: Shield },
   { href: "/runs", label: "Runs", icon: Terminal },
+  { href: "/settings", label: "Ajustes", icon: Settings },
 ];
 
 async function HeaderStatus() {

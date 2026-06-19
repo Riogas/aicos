@@ -4,6 +4,7 @@ import { PaperclipClient } from "./paperclip-client.js";
 import type { PersonaResolution, ProjectWorkspace } from "./registry.js";
 import { buildPersonaPrompt } from "./registry.js";
 import { invokeCli, buildDirectCliPrompt, isCliAvailable } from "./cli-direct.js";
+import { notify } from "./notify.js";
 import type { SupportedCli } from "./cli-direct.js";
 import {
   retrieveAllScopes,
@@ -341,6 +342,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         } catch (e) {
           process.stderr.write(`[policy] failed to post approval marker: ${(e as Error).message}\n`);
         }
+        void notify(`⏸ *${input.ticketIdentifier || pc.issueId}* necesita tu aprobación.`);
       }
       const durationMs = Date.now() - start;
       return {
@@ -747,6 +749,15 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
       );
     }
     void pc.client.reportCost(pc.issueId, {});
+
+    // Notificación saliente (Telegram) — ticket terminado/bloqueado.
+    const ref = input.ticketIdentifier || pc.issueId;
+    const who = input.persona?.agentName ?? "un agente";
+    void notify(
+      finalStatus === "done"
+        ? `✅ *${ref}* completado por ${who}.`
+        : `⚠️ *${ref}* quedó *bloqueado* (exit ${exitCode}) — necesita revisión.`,
+    );
   }
 
   return { exitCode, output, durationMs, mode };
