@@ -31,6 +31,7 @@ import {
 } from "./retry-manager.js";
 import { agingScan, loadAgingConfig, saveAgingConfig } from "./aging.js";
 import { loadTestGateConfig, saveTestGateConfig } from "./test-gate.js";
+import { fireN8n } from "./n8n.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
 import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
@@ -797,6 +798,21 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   // ─── Gate de tests (#9) ──────────────────────────────────────────────────
   app.get("/test-gate/config", async () => ({ config: loadTestGateConfig() }));
   app.post("/test-gate/config", async (req) => ({ config: saveTestGateConfig((req.body ?? {}) as Parameters<typeof saveTestGateConfig>[0]) }));
+
+  // ─── Disparo de workflows n8n (#10) ──────────────────────────────────────
+  const N8nFireSchema = z.object({
+    trigger: z.string().optional(),
+    url: z.string().url().optional(),
+    method: z.enum(["GET", "POST"]).optional(),
+    payload: z.unknown().optional(),
+  });
+  app.post("/n8n/trigger", async (req, reply) => {
+    const r = N8nFireSchema.safeParse(req.body);
+    if (!r.success) { reply.code(400); return { error: "validation", details: r.error.issues }; }
+    const res = await fireN8n(r.data);
+    if (!res.ok) reply.code(422);
+    return res;
+  });
 
   // ─── Daily standup del CEO ───────────────────────────────────────────────
   app.post("/standup/run", async () => {

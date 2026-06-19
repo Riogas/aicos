@@ -19,6 +19,7 @@ import {
   ShieldAlert,
   Terminal,
   Workflow,
+  Zap,
 } from "lucide-react";
 import { safeFetch, URLS } from "@/lib/fetcher";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -49,6 +50,7 @@ const NAV_GROUPS = [
     label: "Sistema", icon: Settings, items: [
       { href: "/knowledge", label: "Conocimiento", icon: BookOpen },
       { href: "/playbooks", label: "Playbooks", icon: ClipboardList },
+      { href: "/automations", label: "Automatizaciones", icon: Zap },
       { href: "/repos", label: "Repos", icon: FolderGit2 },
       { href: "/mcp", label: "Conectores", icon: Plug },
       { href: "/settings", label: "Ajustes", icon: Settings },
