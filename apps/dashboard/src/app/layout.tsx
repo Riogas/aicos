@@ -13,6 +13,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { safeFetch, URLS } from "@/lib/fetcher";
+import { BrandLogo } from "@/components/BrandLogo";
 
 export const metadata: Metadata = {
   title: "AICOS · Ops Dashboard",
@@ -73,7 +74,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <header className="sticky top-0 z-40 border-b border-border bg-bg/70 backdrop-blur-xl">
           <div className="mx-auto flex max-w-7xl items-center gap-8 px-6 py-3.5">
             <Link href="/" className="group flex items-center gap-2.5">
-              <Logo />
+              <BrandLogo />
               <span className="text-sm font-semibold tracking-tighter2 text-fg">
                 AICOS
               </span>
@@ -130,25 +131,3 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   );
 }
 
-function Logo() {
-  return (
-    <div className="relative grid h-6 w-6 place-items-center overflow-hidden rounded-md bg-gradient-to-br from-accent to-violet shadow-glow">
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className="text-white"
-      >
-        <path
-          d="M6 19V5h4l4 14h4M9 12h6"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </div>
-  );
-}
