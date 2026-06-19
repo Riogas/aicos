@@ -9,6 +9,7 @@ export async function pc(method: string, path: string, body?: unknown): Promise<
     method,
     headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${PC_TOKEN}` },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: "no-store", // Next cachea fetch() por defecto → sin esto, los GET quedan viejos
     signal: AbortSignal.timeout(12000),
   });
   let data: any = null;
@@ -21,6 +22,7 @@ export async function bridge(method: string, path: string, body?: unknown): Prom
     method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: "no-store",
     signal: AbortSignal.timeout(12000),
   });
   let data: any = null;
