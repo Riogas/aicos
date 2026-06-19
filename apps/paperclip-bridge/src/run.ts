@@ -16,6 +16,7 @@ import { buildCandidates, inferProvider } from "./provider-map.js";
 import type { LearningClient } from "./learning-client.js";
 import type { InFlightTracker } from "./in-flight-tracker.js";
 import type { PolicyClient } from "./policy-client.js";
+import type { Disposition } from "./retry-manager.js";
 
 interface CommitResult {
   attempted: boolean;
@@ -174,6 +175,14 @@ export interface ExecuteRunResult {
   output: string;
   durationMs: number;
   mode: "direct-cli" | "hermes-oneshot" | "hermes-fallback";
+  /**
+   * Desenlace para el motor de reintentos (#7):
+   *   completed — exit 0 con output útil (no reintentar)
+   *   empty     — exit 0 sin output/commit (timeout/reconnect → reintentable)
+   *   failed    — exit != 0 (reintentable)
+   *   held      — frenado por policy (deny/awaiting-approval → NO reintentar)
+   */
+  disposition: Disposition;
 }
 
 const KNOWN_CLIS: ReadonlyArray<SupportedCli> = [
@@ -322,6 +331,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         output: `**Policy denied:** ${verdict.reason ?? "no reason given"}${verdict.matchedRule ? ` (rule: ${verdict.matchedRule})` : ""}`,
         durationMs,
         mode: "direct-cli",
+        disposition: "held",
       };
     }
     if (verdict.decision === "require_approval") {
@@ -350,6 +360,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         output: `**Awaiting approval:** ${verdict.reason ?? "policy requires explicit approval"}`,
         durationMs,
         mode: "direct-cli",
+        disposition: "held",
       };
     }
   }
@@ -768,5 +779,13 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
     );
   }
 
-  return { exitCode, output, durationMs, mode };
+  // Desenlace para el motor de reintentos (#7).
+  const disposition: Disposition =
+    exitCode === 0
+      ? output.trim() || commitInfo?.committed
+        ? "completed"
+        : "empty" // exit 0 sin output ni commit → probable timeout/reconnect
+      : "failed";
+
+  return { exitCode, output, durationMs, mode, disposition };
 }

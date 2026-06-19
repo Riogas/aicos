@@ -9,15 +9,21 @@ interface State {
   panic: { active: boolean; pausedCount: number; totalAgents: number };
   inflight: number;
 }
+interface RetryCfg { enabled: boolean; maxAttempts: number; backoffMinutes: number[] }
+interface RetryItem { issueId: string; identifier?: string; attempts: number; escalated?: boolean; nextDueAt?: number; lastFailedAt?: string }
+interface RetryInfo { config: RetryCfg; pending: RetryItem[]; escalated: RetryItem[] }
 
 export function ControlClient() {
   const [st, setSt] = useState<State | null>(null);
+  const [retry, setRetry] = useState<RetryInfo | null>(null);
+  const [cfg, setCfg] = useState<RetryCfg | null>(null);
   const [busy, setBusy] = useState<string>(""); // id+action en curso
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(() => {
     fetch("/api/control/state").then((r) => r.json()).then(setSt).catch(() => {});
+    fetch("/api/retry").then((r) => r.json()).then((d: RetryInfo) => { setRetry(d); setCfg((c) => c ?? d.config); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -42,6 +48,24 @@ export function ControlClient() {
     const url = action === "approve" ? "/api/control/approve" : "/api/control/ticket";
     const body = action === "approve" ? { issueId } : { issueId, action };
     act(url, body, `${issueId}:${label}`);
+  };
+
+  const saveCfg = async () => {
+    if (!cfg) return;
+    setBusy("retrycfg"); setFlash(null);
+    try {
+      const r = await fetch("/api/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cfg) });
+      const d = await r.json();
+      setFlash(d.config ? { ok: true, text: "Config guardada ✓" } : { ok: false, text: d.error || "falló" });
+      load();
+    } catch (e) { setFlash({ ok: false, text: (e as Error).message }); }
+    finally { setBusy(""); }
+  };
+
+  const clearRetry = async (issueId: string) => {
+    setBusy(`clear:${issueId}`);
+    try { await fetch(`/api/retry?issueId=${encodeURIComponent(issueId)}`, { method: "DELETE" }); load(); }
+    finally { setBusy(""); }
   };
 
   const panic = (action: "pause" | "resume") => {
@@ -88,6 +112,70 @@ export function ControlClient() {
             </button>
           )}
         </div>
+      </section>
+
+      {/* Escalados — máxima prioridad */}
+      {retry && retry.escalated.length > 0 && (
+        <section className="mt-8">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-danger">🚨 Escalados a humano · {retry.escalated.length}</h3>
+          <div className="space-y-2">
+            {retry.escalated.map((e) => (
+              <div key={e.issueId} className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger-soft px-4 py-3">
+                <span className="font-mono text-xs text-danger">{e.identifier || e.issueId}</span>
+                <span className="flex-1 truncate text-sm text-fg">Falló {e.attempts} reintento(s) automático(s) — necesita intervención.</span>
+                <Btn onClick={() => ticketAction(e.issueId, "relaunch", "relaunch")} busy={busy === `${e.issueId}:relaunch`} tone="accent">Re-lanzar</Btn>
+                <Btn onClick={() => clearRetry(e.issueId)} busy={busy === `clear:${e.issueId}`} tone="success">Marcar resuelto</Btn>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Reintentos en cola + config */}
+      <section className="mt-8 rounded-xl border border-border bg-surface/40 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-fg">Reintentos automáticos</h3>
+            <p className="mt-1 text-xs text-subtle">
+              {cfg?.enabled
+                ? `Un ticket fallido se re-lanza con backoff hasta ${cfg.maxAttempts} vez/veces; después escala.`
+                : "Desactivados — los tickets fallidos quedan bloqueados sin reintentar."}
+              {retry && retry.pending.length > 0 && <> · <span className="text-hud">{retry.pending.length} en cola</span></>}
+            </p>
+          </div>
+          {cfg && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                <input type="checkbox" checked={cfg.enabled} onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })} />
+                activos
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                máx
+                <input type="number" min={1} max={10} value={cfg.maxAttempts} onChange={(e) => setCfg({ ...cfg, maxAttempts: Math.max(1, Math.min(10, Number(e.target.value) || 1)) })}
+                  className="w-14 rounded-md border border-border bg-surface px-2 py-1 text-fg" />
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                backoff (min)
+                <input type="text" value={cfg.backoffMinutes.join(", ")} onChange={(e) => setCfg({ ...cfg, backoffMinutes: e.target.value.split(",").map((x) => Number(x.trim())).filter((n) => Number.isFinite(n) && n >= 0) })}
+                  className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-fg" placeholder="2, 10, 30" />
+              </label>
+              <button onClick={saveCfg} disabled={busy === "retrycfg"} className="rounded-md border border-accent/40 px-3 py-1 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-40">
+                {busy === "retrycfg" ? "…" : "Guardar"}
+              </button>
+            </div>
+          )}
+        </div>
+        {retry && retry.pending.length > 0 && (
+          <div className="mt-3 space-y-1.5 border-t border-border/60 pt-3">
+            {retry.pending.map((p) => (
+              <div key={p.issueId} className="flex items-center gap-3 text-xs">
+                <span className="font-mono text-subtle">{p.identifier || p.issueId}</span>
+                <span className="text-muted">reintento {p.attempts}/{cfg?.maxAttempts}</span>
+                {p.nextDueAt && <span className="text-hud">en {Math.max(0, Math.round((p.nextDueAt - Date.now()) / 60000))} min</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Blocked */}

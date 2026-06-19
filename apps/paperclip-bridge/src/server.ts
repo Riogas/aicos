@@ -21,6 +21,14 @@ import {
   type MemoryScope,
 } from "./memory.js";
 import { ingestDocument, listDocuments, deleteDocument } from "./knowledge.js";
+import {
+  recordRunOutcome,
+  loadRetryConfig,
+  saveRetryConfig,
+  retryState,
+  clearRetry,
+  type Disposition,
+} from "./retry-manager.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
 import { InFlightTracker, type TrackerEvent, type RunStage } from "./in-flight-tracker.js";
@@ -118,7 +126,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
           )
         : undefined;
     try {
-      await executeRun({
+      const result = await executeRun({
         prompt: job.prompt,
         model: job.model,
         provider: job.provider,
@@ -137,6 +145,12 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
         approved: job.approved,
         onOutput: (chunk) => tracker.appendOutput(job.runId, chunk),
       });
+      // Motor de reintentos (#7): registra el desenlace del ticket.
+      if (job.paperclipIssueId) {
+        void recordRunOutcome(job.paperclipIssueId, job.ticketIdentifier, result.disposition).catch((e) =>
+          process.stderr.write(`[retry] recordRunOutcome warn: ${(e as Error).message}\n`),
+        );
+      }
     } finally {
       tracker.setStage(job.runId, "done");
     }
@@ -747,6 +761,30 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   app.delete("/knowledge/:docId", async (req) => {
     const { docId } = req.params as { docId: string };
     return await deleteDocument(decodeURIComponent(docId));
+  });
+
+  // ─── Reintentos inteligentes + escalado (#7) ─────────────────────────────
+  // Lo postea el process-adapter (que corre en el container) al terminar un run,
+  // para que el bridge host decida reintento/escalado. El path de la cola lo
+  // llama in-process directamente.
+  const RunFinishedSchema = z.object({
+    issueId: z.string().min(1),
+    identifier: z.string().optional(),
+    disposition: z.enum(["completed", "failed", "empty", "held"]),
+  });
+  app.post("/internal/run-finished", async (req, reply) => {
+    const r = RunFinishedSchema.safeParse(req.body);
+    if (!r.success) { reply.code(400); return { error: "validation", details: r.error.issues }; }
+    await recordRunOutcome(r.data.issueId, r.data.identifier, r.data.disposition as Disposition).catch(() => {});
+    return { ok: true };
+  });
+
+  app.get("/retry/config", async () => ({ config: loadRetryConfig() }));
+  app.post("/retry/config", async (req) => ({ config: saveRetryConfig((req.body ?? {}) as Parameters<typeof saveRetryConfig>[0]) }));
+  app.get("/retry/state", async () => retryState());
+  app.delete("/retry/:issueId", async (req) => {
+    const { issueId } = req.params as { issueId: string };
+    return { ok: clearRetry(decodeURIComponent(issueId)) };
   });
 
   // ─── Daily standup del CEO ───────────────────────────────────────────────

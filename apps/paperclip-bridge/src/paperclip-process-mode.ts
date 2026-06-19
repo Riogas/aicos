@@ -105,6 +105,29 @@ async function reportStage(
   }
 }
 
+const BRIDGE_FINISHED_URL =
+  process.env.BRIDGE_FINISHED_URL ?? "http://host.docker.internal:7100/internal/run-finished";
+
+/**
+ * Reporta el desenlace del run al bridge host para el motor de reintentos (#7).
+ * Best-effort — un fallo acá no rompe el run.
+ */
+async function reportFinished(payload: { issueId: string; identifier?: string; disposition: string }): Promise<void> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    await fetch(BRIDGE_FINISHED_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+  } catch {
+    /* el reintento no debe romper el run */
+  }
+}
+
 const BRIDGE_OUTPUT_URL =
   process.env.BRIDGE_OUTPUT_URL ?? "http://host.docker.internal:7100/output";
 
@@ -380,6 +403,13 @@ export async function runPaperclipProcessMode(): Promise<number> {
   };
   // Paperclip captures stdout as resultJson.stdout for the heartbeat_run.
   process.stdout.write(JSON.stringify(summary) + "\n");
+
+  // Reporta el desenlace al bridge host → motor de reintentos/escalado (#7).
+  await reportFinished({
+    issueId: issue.id,
+    identifier: issue.identifier ?? undefined,
+    disposition: result.disposition,
+  });
 
   return result.exitCode === 0 ? 0 : 1;
 }
