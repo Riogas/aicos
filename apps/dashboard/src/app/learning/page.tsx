@@ -59,6 +59,18 @@ export default async function LearningPage() {
   const withData = entries.filter(([, r]) => r.totalSamples > 0);
   const withoutData = entries.filter(([, r]) => r.totalSamples === 0);
 
+  // Scoring POR AGENTE — quién rinde mejor (de los outcomes recientes).
+  const byAgent: Record<string, { total: number; success: number; cost: number; dur: number; models: Set<string> }> = {};
+  for (const it of recent.data?.items ?? []) {
+    if (!it.agentRegistryId) continue;
+    const a = (byAgent[it.agentRegistryId] ||= { total: 0, success: 0, cost: 0, dur: 0, models: new Set() });
+    a.total++; if (it.success) a.success++; a.cost += it.costUsd; a.dur += it.durationMs;
+    a.models.add((it.model || "").split("/").pop() || it.model);
+  }
+  const agentScores = Object.entries(byAgent)
+    .map(([id, s]) => ({ id, total: s.total, successRate: s.total ? s.success / s.total : 0, avgCost: s.total ? s.cost / s.total : 0, avgDur: s.total ? s.dur / s.total : 0, models: [...s.models] }))
+    .sort((a, b) => b.successRate - a.successRate || b.total - a.total);
+
   return (
     <div className="space-y-8 animate-fade-in">
       <header>
@@ -91,6 +103,45 @@ export default async function LearningPage() {
                 </span>
               </div>
             ))}
+          </div>
+        </Card>
+      )}
+
+      {agentScores.length > 0 && (
+        <Card title="Scorecard por agente" subtitle="quién rinde mejor (outcomes recientes)">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border/60 text-left font-mono text-2xs uppercase tracking-tightest text-subtle">
+                  <th className="py-2 pr-4 font-normal">agente</th>
+                  <th className="py-2 pr-4 text-right font-normal">runs</th>
+                  <th className="py-2 pr-4 font-normal">éxito</th>
+                  <th className="py-2 pr-4 text-right font-normal">avg cost</th>
+                  <th className="py-2 pr-4 text-right font-normal">avg ms</th>
+                  <th className="py-2 pr-4 font-normal">modelos</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/40">
+                {agentScores.map((a) => {
+                  const pct = Math.round(a.successRate * 100);
+                  return (
+                    <tr key={a.id} className="text-xs hover:bg-surface-2">
+                      <td className="py-2 pr-4 font-mono text-fg">{a.id}</td>
+                      <td className="py-2 pr-4 text-right font-mono tabular text-muted">{a.total}</td>
+                      <td className="py-2 pr-4">
+                        <div className="flex items-center gap-2">
+                          <div className="w-16"><Bar percent={pct} size="sm" /></div>
+                          <span className={`font-mono tabular ${pct >= 80 ? "text-success" : pct >= 50 ? "text-warning" : "text-danger"}`}>{pct}%</span>
+                        </div>
+                      </td>
+                      <td className="py-2 pr-4 text-right font-mono tabular text-muted">${a.avgCost.toFixed(4)}</td>
+                      <td className="py-2 pr-4 text-right font-mono tabular text-muted">{Math.round(a.avgDur)}</td>
+                      <td className="py-2 pr-4 font-mono text-2xs text-subtle">{a.models.join(", ")}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </Card>
       )}
