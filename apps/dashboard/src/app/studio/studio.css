@@ -37,12 +37,37 @@
 .sr-grid { display: flex; gap: 16px; flex: 1; min-height: 0; }
 .sr-chat { flex: 1.5; display: flex; flex-direction: column; min-width: 0;
   background: #070707; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; overflow: hidden; }
-.sr-panel { width: 400px; flex-shrink: 0;
+.sr-panel { width: 380px; flex-shrink: 0;
   background: #070707; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; overflow-y: auto; }
 
-@media (max-width: 1000px) {
+/* sidebar historial */
+.sr-side { width: 232px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px;
+  background: #070707; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; padding: 12px; overflow: hidden; }
+.sr-new { width: 100%; padding: 9px; border-radius: 9px; cursor: pointer; font-weight: 600; font-size: 12.5px;
+  background: rgba(0,217,255,.08); color: #00d9ff; border: 1px solid rgba(0,217,255,.3); }
+.sr-new:hover:not(:disabled) { background: rgba(0,217,255,.14); }
+.sr-new:disabled { opacity: .4; cursor: default; }
+.sr-convs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; margin: 0 -4px; padding: 0 4px; }
+.sr-side-empty { font-size: 11.5px; color: #52525b; line-height: 1.5; padding: 8px 4px; }
+.sr-convgrp { display: flex; flex-direction: column; gap: 2px; }
+.sr-convgrp-lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .09em; color: #52525b; font-weight: 600; padding: 2px 6px; }
+.sr-conv { display: flex; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 8px; cursor: pointer; transition: background .12s; }
+.sr-conv:hover { background: #131313; }
+.sr-conv.on { background: #18181b; box-shadow: inset 0 0 0 1px rgba(0,217,255,.22); }
+.sr-conv-ic { flex-shrink: 0; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; color: #001018; }
+.sr-conv-ic[data-who="ceo"] { background: #EAB308; }
+.sr-conv-ic[data-who="hermes"] { background: #00d9ff; }
+.sr-conv-title { flex: 1; font-size: 12px; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sr-conv-del { flex-shrink: 0; background: transparent; border: none; color: #52525b; cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; opacity: 0; }
+.sr-conv:hover .sr-conv-del { opacity: 1; }
+.sr-conv-del:hover { color: #ef4444; }
+
+@media (max-width: 1100px) {
   .sr-root { height: auto; }
   .sr-grid { flex-direction: column; }
+  .sr-side { width: auto; max-height: 200px; }
+  .sr-convs { flex-direction: row; flex-wrap: wrap; }
   .sr-panel { width: auto; max-height: 70vh; }
   .sr-chat { min-height: 60vh; }
 }
