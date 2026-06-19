@@ -115,6 +115,34 @@
 }
 .sr-send:disabled { opacity: .4; cursor: default; }
 
+/* playbooks (plantillas) */
+.sr-pb-wrap { position: relative; }
+.sr-pb-btn {
+  font-size: 12px; font-weight: 500; color: #d4d4d8; padding: 6px 12px; border-radius: 8px;
+  background: #0a0a0a; border: 1px solid rgba(255,255,255,.1); cursor: pointer;
+}
+.sr-pb-btn:hover:not(:disabled) { color: #00d9ff; border-color: rgba(0,217,255,.4); }
+.sr-pb-btn:disabled { opacity: .5; cursor: default; }
+.sr-pb-backdrop { position: fixed; inset: 0; z-index: 40; }
+.sr-pb-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; width: 360px; max-height: 60vh; overflow-y: auto;
+  background: #0c0c0e; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 6px;
+  box-shadow: 0 16px 48px rgba(0,0,0,.6);
+}
+.sr-pb-menu-h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: #71717a; padding: 8px 10px 6px; }
+.sr-pb-item {
+  display: flex; gap: 10px; width: 100%; text-align: left; padding: 9px 10px; border-radius: 9px;
+  background: transparent; border: none; cursor: pointer; color: inherit;
+}
+.sr-pb-item:hover { background: rgba(255,255,255,.05); }
+.sr-pb-emoji { font-size: 18px; line-height: 1.2; }
+.sr-pb-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sr-pb-name { font-size: 13px; font-weight: 600; color: #fafafa; display: flex; align-items: center; gap: 8px; }
+.sr-pb-cat { font-style: normal; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #00d9ff; background: rgba(0,217,255,.1); padding: 1px 6px; border-radius: 5px; }
+.sr-pb-desc { font-size: 11.5px; color: #a1a1aa; line-height: 1.35; }
+.sr-pb-manage { display: block; font-size: 11.5px; color: #71717a; padding: 8px 10px; text-decoration: none; border-top: 1px solid rgba(255,255,255,.07); margin-top: 4px; }
+.sr-pb-manage:hover { color: #00d9ff; }
+
 /* adjuntos (evidencia) */
 .sr-inputwrap { border-top: 1px solid rgba(255,255,255,.07); background: #0a0a0a; }
 .sr-inputwrap .sr-input { border-top: none; }

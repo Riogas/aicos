@@ -9,6 +9,7 @@ import {
   ChevronDown,
   FolderGit2,
   BookOpen,
+  ClipboardList,
   Gauge,
   MessagesSquare,
   Plug,
@@ -47,6 +48,7 @@ const NAV_GROUPS = [
   {
     label: "Sistema", icon: Settings, items: [
       { href: "/knowledge", label: "Conocimiento", icon: BookOpen },
+      { href: "/playbooks", label: "Playbooks", icon: ClipboardList },
       { href: "/repos", label: "Repos", icon: FolderGit2 },
       { href: "/mcp", label: "Conectores", icon: Plug },
       { href: "/settings", label: "Ajustes", icon: Settings },

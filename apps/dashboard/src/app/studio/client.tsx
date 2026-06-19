@@ -33,6 +33,7 @@ interface Msg {
 }
 interface RosterAgent { id: string; name: string; department: string; color: string }
 interface ConvMeta { id: string; title: string; interlocutor: string; updatedAt: number }
+interface Playbook { id: string; name: string; description: string; emoji?: string; category?: string; interlocutor?: Who; model?: ModelKey; template: string; builtin?: boolean }
 interface ApplyResult {
   ok?: boolean;
   parent?: { identifier: string };
@@ -126,9 +127,12 @@ export function StudioClient() {
   const [applyRes, setApplyRes] = useState<ApplyResult | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
+  const [showPlaybooks, setShowPlaybooks] = useState(false);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // refs para persistir sin closures viejas
   const r = useRef({ messages, sessionId, convId, who, model, repoPath });
@@ -147,6 +151,7 @@ export function StudioClient() {
       setRoster(m);
     }).catch(() => {});
     fetch("/api/repos").then((x) => x.json()).then((d: { repos: { name: string; path: string }[] }) => setRepos(d.repos || [])).catch(() => {});
+    fetch("/api/playbooks").then((x) => x.json()).then((d: { playbooks: Playbook[] }) => setPlaybooks(d.playbooks || [])).catch(() => {});
     loadConvs();
   }, [loadConvs]);
 
@@ -174,6 +179,17 @@ export function StudioClient() {
     setMessages([]); setSessionId(null); setApplyRes(null); setBusy(false);
     setAttachments([]);
     setConvId(genId());
+  };
+
+  const usePlaybook = (pb: Playbook) => {
+    // Arranca trabajo nuevo: conversación limpia con la plantilla cargada.
+    setMessages([]); setSessionId(null); setApplyRes(null); setBusy(false); setAttachments([]);
+    setConvId(genId());
+    if (pb.interlocutor) setWho(pb.interlocutor);
+    if (pb.model) setModel(pb.model);
+    setInput(pb.template);
+    setShowPlaybooks(false);
+    setTimeout(() => { inputRef.current?.focus(); }, 0);
   };
 
   const onFiles = useCallback(async (files: FileList | null) => {
@@ -295,6 +311,31 @@ export function StudioClient() {
           <p className="sr-sub">Brainstorm con tu equipo → spec ejecutable → tickets en Paperclip</p>
         </div>
         <div className="sr-controls">
+          {playbooks.length > 0 && (
+            <div className="sr-pb-wrap">
+              <button className="sr-pb-btn" onClick={() => setShowPlaybooks((s) => !s)} disabled={busy} title="Plantillas para arrancar trabajo común">
+                📋 Playbooks ▾
+              </button>
+              {showPlaybooks && (
+                <>
+                  <div className="sr-pb-backdrop" onClick={() => setShowPlaybooks(false)} />
+                  <div className="sr-pb-menu">
+                    <div className="sr-pb-menu-h">Arrancá con una plantilla</div>
+                    {playbooks.map((pb) => (
+                      <button key={pb.id} className="sr-pb-item" onClick={() => usePlaybook(pb)}>
+                        <span className="sr-pb-emoji">{pb.emoji || "📋"}</span>
+                        <span className="sr-pb-txt">
+                          <span className="sr-pb-name">{pb.name}{pb.category && <em className="sr-pb-cat">{pb.category}</em>}</span>
+                          <span className="sr-pb-desc">{pb.description}</span>
+                        </span>
+                      </button>
+                    ))}
+                    <a className="sr-pb-manage" href="/playbooks">Gestionar playbooks →</a>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <Seg<Who> value={who} onChange={(v) => { setWho(v); newConv(); }} options={[{ k: "ceo", label: "CEO" }, { k: "hermes", label: "Hermes" }]} disabled={busy} />
           <Seg<ModelKey> value={model} onChange={setModel} options={[{ k: "opus", label: "Opus 4.8" }, { k: "sonnet", label: "Sonnet 4.6" }]} disabled={busy} />
           {repos.length > 0 && (
@@ -376,6 +417,7 @@ export function StudioClient() {
               >📎</button>
               <input ref={fileRef} type="file" multiple hidden onChange={(e) => onFiles(e.target.files)} />
               <textarea
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
