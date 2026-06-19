@@ -149,7 +149,8 @@ function pointId(scope: MemoryScope, key: string): string {
   const b = (h2 >>> 0).toString(16).padStart(8, "0");
   const c = ((h1 ^ h2) >>> 0).toString(16).padStart(8, "0");
   const d = (Math.imul(h1, h2) >>> 0).toString(16).padStart(8, "0");
-  return `${a.slice(0, 8)}-${b.slice(0, 4)}-4${b.slice(4, 7)}-8${c.slice(0, 3)}-${c.slice(3, 8)}${d}`;
+  // Segmento final = 12 hex (antes 13: c.slice(3,8)=5 + d=8 → UUID inválido).
+  return `${a.slice(0, 8)}-${b.slice(0, 4)}-4${b.slice(4, 7)}-8${c.slice(0, 3)}-${c.slice(3, 7)}${d}`;
 }
 
 function dedupKeyFor(entry: MemoryEntry): string {
