@@ -55,6 +55,22 @@ services:
         soft: 65536
         hard: 65536
 
+  # Embeddings locales (claude-only, sin APIs externas) para la memoria L4.
+  # text-embeddings-inference (CPU) sirviendo un modelo multilingüe de 384 dims.
+  # El bridge le pega en /embed (ver AICOS_EMBEDDINGS_URL). Descarga el modelo al
+  # primer arranque (necesita internet esa vez).
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
+    container_name: aicos-embeddings
+    restart: unless-stopped
+    command: ["--model-id", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"]
+    environment:
+      HF_HOME: /data
+    volumes:
+      - embeddings-data:/data
+    ports:
+      - "7080:80"
+
   paperclip:
     build:
       context: ../vendor/paperclip
@@ -309,6 +325,7 @@ volumes:
   postgres-data:
   redis-data:
   qdrant-data:
+  embeddings-data:
   paperclip-data:
   caddy-data:
   caddy-config:

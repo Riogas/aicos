@@ -133,7 +133,13 @@ def _materialize_envs(state: dict, repo: Path) -> None:
         "GATEWAY_SERVICE_URL":      prev_bridge.get("GATEWAY_SERVICE_URL") or "http://localhost:7004",
         "REDIS_URL":                prev_bridge.get("REDIS_URL") or "redis://localhost:6379",
         "QDRANT_URL":               prev_bridge.get("QDRANT_URL") or "http://localhost:6333",
-        # Optional: embeddings for the memory collections (skip = memory off).
+        # Embeddings locales (claude-only) para la memoria L4 — contenedor
+        # text-embeddings-inference (modelo multilingüe 384 dims). El host bridge
+        # le pega por el puerto mapeado.
+        "AICOS_EMBEDDINGS_URL":     prev_bridge.get("AICOS_EMBEDDINGS_URL") or "http://localhost:7080/embed",
+        "AICOS_EMBEDDINGS_DIM":     prev_bridge.get("AICOS_EMBEDDINGS_DIM") or "384",
+        # Optional: si querés embeddings por OpenAI en vez del local, seteá esto
+        # y borrá AICOS_EMBEDDINGS_URL.
         "OPENAI_API_KEY":           (state.get("openai_api_key") or cli_keys.get("OPENAI_API_KEY")
                                      or prev_bridge.get("OPENAI_API_KEY") or None),
         "AICOS_COMPANY_ID":         state.get("company_id") or prev_bridge.get("AICOS_COMPANY_ID", ""),
@@ -269,7 +275,7 @@ def _install_systemd_units(state: dict, repo: Path) -> None:
 # systemd (it needs hot access to the bridge on localhost:7100) — bringing it
 # up in docker would clash on :3000. Explicit list, never bare `up -d`.
 COMPOSE_SERVICES = [
-    "postgres", "redis", "qdrant", "paperclip",
+    "postgres", "redis", "qdrant", "embeddings", "paperclip",
     "aicos-quota-manager", "aicos-policy-engine",
     "aicos-tool-gateway", "aicos-learning",
 ]

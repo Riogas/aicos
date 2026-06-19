@@ -17,7 +17,12 @@
 const QDRANT_URL = process.env.QDRANT_URL ?? "http://localhost:6333";
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const EMBED_MODEL = "text-embedding-3-small";
-const EMBED_DIM = 1536;
+// Embedder local (claude-only, sin APIs externas): apuntá AICOS_EMBEDDINGS_URL a
+// un text-embeddings-inference (TEI) `/embed`. Si no está, cae a OpenAI (si hay
+// OPENAI_API_KEY). El dim DEBE matchear el modelo del embedder.
+const EMBED_URL = process.env.AICOS_EMBEDDINGS_URL || "";
+const EMBED_DIM = Number(process.env.AICOS_EMBEDDINGS_DIM) || (EMBED_URL ? 384 : 1536);
+const hasEmbedder = Boolean(EMBED_URL || OPENAI_KEY);
 
 export type MemoryScope = "agent" | "project" | "company" | "market";
 
@@ -53,18 +58,36 @@ export interface RetrievedMemory {
 }
 
 async function embed(text: string): Promise<number[] | null> {
+  const t = text.slice(0, 8000);
+  // Embedder local (TEI) — sin auth. TEI /embed espera {inputs} y devuelve
+  // [[...]] ; también aceptamos formato OpenAI {data:[{embedding}]} por si se
+  // apunta a un endpoint compatible.
+  if (EMBED_URL) {
+    try {
+      const r = await fetch(EMBED_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs: t, input: t }),
+      });
+      if (!r.ok) {
+        process.stderr.write(`[memory] embed local fail: ${r.status} ${await r.text().catch(() => "")}\n`);
+        return null;
+      }
+      const j = (await r.json()) as unknown;
+      if (Array.isArray(j) && Array.isArray((j as number[][])[0])) return (j as number[][])[0];
+      const oai = j as { data?: { embedding: number[] }[] };
+      return oai.data?.[0]?.embedding ?? null;
+    } catch (e) {
+      process.stderr.write(`[memory] embed local error: ${(e as Error).message}\n`);
+      return null;
+    }
+  }
   if (!OPENAI_KEY) return null;
   try {
     const r = await fetch("https://api.openai.com/v1/embeddings", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENAI_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: EMBED_MODEL,
-        input: text.slice(0, 8000),
-      }),
+      headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: EMBED_MODEL, input: t }),
     });
     if (!r.ok) {
       process.stderr.write(`[memory] embed fail: ${r.status} ${await r.text().catch(() => "")}\n`);
@@ -147,7 +170,7 @@ function dedupKeyFor(entry: MemoryEntry): string {
  * Returns true if stored, false on any failure (logs internally).
  */
 export async function storeMemory(entry: MemoryEntry): Promise<boolean> {
-  if (!OPENAI_KEY) return false;
+  if (!hasEmbedder) return false;
   if (entry.scope === "agent" && !entry.registryId) {
     process.stderr.write(`[memory] agent scope needs registryId\n`);
     return false;
@@ -217,7 +240,7 @@ export async function retrieveFromScope(
   query: string,
   opts: RetrieveOpts = {},
 ): Promise<RetrievedMemory[]> {
-  if (!OPENAI_KEY) return [];
+  if (!hasEmbedder) return [];
   const ok = await ensureCollection(scope);
   if (!ok) return [];
   const vector = await embed(query);

@@ -85,6 +85,9 @@ function processAdapterConfig(apiKey) {
       // rechaza --dangerously-skip-permissions como root salvo que IS_SANDBOX=1
       // declare un entorno sandboxeado (el container lo es).
       IS_SANDBOX: "1",
+      // Embeddings locales para la memoria L4 (desde el container, vía host).
+      AICOS_EMBEDDINGS_URL: "http://host.docker.internal:7080/embed",
+      AICOS_EMBEDDINGS_DIM: "384",
       QUOTA_SERVICE_URL: "http://host.docker.internal:7001",
       POLICY_SERVICE_URL: "http://host.docker.internal:7002",
       LEARNING_SERVICE_URL: "http://host.docker.internal:7003",
