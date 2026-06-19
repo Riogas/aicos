@@ -10,6 +10,7 @@ import {
   Sparkles,
   Settings,
   Shield,
+  ShieldAlert,
   Terminal,
   Workflow,
 } from "lucide-react";
@@ -25,6 +26,7 @@ const NAV = [
   { href: "/", label: "Overview", icon: Activity },
   { href: "/flow", label: "Flow", icon: Workflow },
   { href: "/studio", label: "Strategy Room", icon: MessagesSquare },
+  { href: "/control", label: "Control", icon: ShieldAlert },
   { href: "/quota", label: "Quota", icon: Gauge },
   { href: "/learning", label: "Learning", icon: Sparkles },
   { href: "/policy", label: "Policy", icon: Shield },
