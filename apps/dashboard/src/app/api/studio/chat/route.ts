@@ -32,6 +32,58 @@ function modelAlias(m: string | undefined): string {
   return "opus"; // default: specs de calidad
 }
 
+const BRIDGE = process.env.BRIDGE_SERVICE_URL || "http://localhost:7100";
+
+/**
+ * Trae contexto de charlas anteriores desde la memoria L4 (Qdrant vía bridge),
+ * scope "company". Se inyecta en el system prompt al iniciar una conversación
+ * nueva para que el agente tenga continuidad entre días/temas.
+ */
+async function retrieveMemoryContext(query: string): Promise<string> {
+  try {
+    const res = await fetch(`${BRIDGE}/memory/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, scope: "company", limit: 5 }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return "";
+    const d = (await res.json()) as { items?: { text?: string; summary?: string }[] };
+    const items = (d.items || [])
+      .map((it) => (it.summary || it.text || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!items.length) return "";
+    return (
+      "\n\n# Memoria de charlas anteriores (contexto recuperado — usalo si es relevante, ignoralo si no)\n" +
+      items.map((t) => `- ${t.slice(0, 400)}`).join("\n")
+    );
+  } catch {
+    return "";
+  }
+}
+
+/** Persiste el intercambio en la memoria L4 (scope company) — fire-and-forget. */
+function storeStrategyMemory(who: string, userMsg: string, agentText: string): void {
+  const text =
+    `Strategy Room (${who === "ceo" ? "CEO" : "Hermes"}). ` +
+    `El operador planteó: ${userMsg.slice(0, 500)}\n` +
+    `Respuesta/acuerdo: ${agentText.replace(/\s+/g, " ").slice(0, 900)}`;
+  try {
+    void fetch(`${BRIDGE}/memory/store`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "company",
+        text,
+        summary: userMsg.slice(0, 140),
+        tags: ["strategy-room", who],
+      }),
+      signal: AbortSignal.timeout(4000),
+    }).catch(() => {});
+  } catch { /* noop */ }
+}
+
 export async function POST(req: Request) {
   let body: { interlocutor?: string; message?: string; sessionId?: string; model?: string };
   try {
@@ -63,7 +115,8 @@ export async function POST(req: Request) {
     args.push("--resume", sessionId);
   } else {
     const roster = loadRoster();
-    args.push("--append-system-prompt", buildSystemPrompt(who, roster, CAN_READ_REPO));
+    const memCtx = await retrieveMemoryContext(message);
+    args.push("--append-system-prompt", buildSystemPrompt(who, roster, CAN_READ_REPO) + memCtx);
   }
 
   const encoder = new TextEncoder();
@@ -73,6 +126,7 @@ export async function POST(req: Request) {
       let buf = "";
       let stderr = "";
       let sentSession = false;
+      let assistantText = "";
       const send = (obj: unknown) => {
         try { controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n")); } catch { /* closed */ }
       };
@@ -97,6 +151,7 @@ export async function POST(req: Request) {
             for (const p of msg?.content ?? []) {
               const part = p as Record<string, unknown>;
               if (part.type === "text" && typeof part.text === "string" && part.text) {
+                assistantText += part.text;
                 send({ type: "text", text: part.text });
               } else if (part.type === "tool_use") {
                 send({ type: "tool", text: String(part.name ?? "tool") });
@@ -114,6 +169,9 @@ export async function POST(req: Request) {
       proc.on("exit", (code) => {
         if (code !== 0) {
           send({ type: "error", error: `claude exit ${code}: ${stderr.slice(-400) || "sin stderr"}` });
+        } else if (assistantText.trim()) {
+          // Persistir el intercambio como memoria L4 (continuidad entre charlas).
+          storeStrategyMemory(who, message, assistantText);
         }
         try { controller.close(); } catch {}
       });
