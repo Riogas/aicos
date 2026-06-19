@@ -5,6 +5,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import {
   Activity,
+  CalendarClock,
   Gauge,
   MessagesSquare,
   Sparkles,
@@ -31,6 +32,7 @@ const NAV = [
   { href: "/learning", label: "Learning", icon: Sparkles },
   { href: "/policy", label: "Policy", icon: Shield },
   { href: "/runs", label: "Runs", icon: Terminal },
+  { href: "/schedules", label: "Programadas", icon: CalendarClock },
   { href: "/settings", label: "Ajustes", icon: Settings },
 ];
 

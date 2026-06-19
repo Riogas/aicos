@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { runHermesOneshot } from "./hermes.js";
 import { startServer } from "./server.js";
 import { runPaperclipProcessMode } from "./paperclip-process-mode.js";
+import { startScheduler } from "./scheduler.js";
 
 const VERSION = "0.3.0";
 
@@ -103,6 +104,8 @@ async function main(): Promise<number> {
       },
       "aicos-bridge listening",
     );
+    // Scheduler de tareas programadas — solo en el bridge host (serve).
+    startScheduler();
     return -1; // sentinela: nunca termina por su cuenta
   }
 
