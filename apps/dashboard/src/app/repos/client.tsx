@@ -6,7 +6,7 @@ interface Repo { name: string; path: string; git: boolean; branch?: string; kind
 interface Detail { path: string; files: { name: string; dir: boolean }[]; readme: string | null }
 
 const KIND_COLOR: Record<string, string> = {
-  next: "#00d9ff", node: "#22c55e", python: "#3b82f6", go: "#06b6d4", rust: "#f59e0b",
+  next: "#00ff9c", node: "#22c55e", python: "#00e676", go: "#06b6d4", rust: "#f59e0b",
   php: "#a855f7", docker: "#60a5fa", repo: "#a1a1aa", folder: "#71717a",
 };
 
@@ -18,8 +18,11 @@ export function ReposClient() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  const [projectsRoot, setProjectsRoot] = useState("");
+  const [draftProjects, setDraftProjects] = useState("");
+  const [flashP, setFlashP] = useState<string | null>(null);
 
-  const load = () => fetch("/api/repos").then((r) => r.json()).then((d) => { setRoot(d.root); setDraftRoot(d.root); setRepos(d.repos || []); }).catch(() => {});
+  const load = () => fetch("/api/repos").then((r) => r.json()).then((d) => { setRoot(d.root); setDraftRoot(d.root); setProjectsRoot(d.projectsRoot || ""); setDraftProjects(d.projectsRoot || ""); setRepos(d.repos || []); }).catch(() => {});
   useEffect(() => { load(); }, []);
 
   const saveRoot = async () => {
@@ -28,6 +31,14 @@ export function ReposClient() {
     const d = await r.json();
     if (d.ok) { setRoot(d.root); setRepos(d.repos || []); setSel(null); setDetail(null); setFlash(`Escaneados ${d.repos.length} repos.`); }
     else setFlash(d.error || "error");
+  };
+
+  const saveProjects = async () => {
+    setFlashP(null);
+    const r = await fetch("/api/repos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectsRoot: draftProjects }) });
+    const d = await r.json();
+    if (d.ok) { setProjectsRoot(d.projectsRoot); setFlashP(`Guardado. Los proyectos nuevos se crean en ${d.projectsRoot}/<nombre>.`); }
+    else setFlashP(d.error || "error");
   };
 
   const open = async (repo: Repo) => {
@@ -44,13 +55,27 @@ export function ReposClient() {
     <div className="mx-auto max-w-5xl">
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-fg">Repositorios</h1>
-        <p className="mt-1 text-sm text-subtle">Carpeta raíz que escanea AICOS. Los repos son accesibles por los agentes (están en el filesystem montado).</p>
+        <p className="mt-1 text-sm text-subtle">Carpeta raíz que escanea Matrix. Los repos son accesibles por los agentes (están en el filesystem montado).</p>
       </div>
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <input className={inp + " flex-1 min-w-[280px] font-mono"} value={draftRoot} onChange={(e) => setDraftRoot(e.target.value)} placeholder="/home/vagrant" />
         <button onClick={saveRoot} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white">Escanear</button>
         {flash && <span className="text-sm text-success">{flash}</span>}
+      </div>
+
+      {/* Carpeta de proyectos nuevos (greenfield) */}
+      <div className="mt-6 rounded-xl border border-border bg-surface/40 p-4">
+        <h2 className="text-sm font-semibold text-fg">Carpeta de proyectos nuevos</h2>
+        <p className="mt-1 text-2xs text-subtle">
+          Cuando los agentes arman un <span className="text-muted">proyecto nuevo</span>, se crea como subcarpeta acá:{" "}
+          <span className="font-mono text-hud">{(projectsRoot || "…")}/&lt;nombre-del-proyecto&gt;</span>. Tiene que ser una ruta dentro del home montado para que la vean los agentes.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input className={inp + " flex-1 min-w-[280px] font-mono"} value={draftProjects} onChange={(e) => setDraftProjects(e.target.value)} placeholder="/home/riogas/Projects" />
+          <button onClick={saveProjects} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white">Guardar</button>
+          {flashP && <span className="text-sm text-success">{flashP}</span>}
+        </div>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-[320px_1fr]">

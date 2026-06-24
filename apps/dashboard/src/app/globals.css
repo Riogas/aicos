@@ -29,7 +29,7 @@ body {
 
 /* Selection */
 ::selection {
-  background: rgba(59,130,246,0.30);
+  background: rgba(0,230,118,0.30);
   color: #fff;
 }
 

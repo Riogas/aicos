@@ -51,7 +51,7 @@ export function StatusStrip({
     <div className="pointer-events-none absolute left-1/2 top-2.5 z-20 flex -translate-x-1/2 items-center gap-4 border border-hud-dim bg-black/70 px-4 py-1.5 backdrop-blur-md"
       style={{
         clipPath: "polygon(12px 0, calc(100% - 12px) 0, 100% 100%, 0 100%)",
-        boxShadow: "0 0 18px rgba(0,217,255,0.12)",
+        boxShadow: "0 0 18px rgba(0,255,156,0.12)",
       }}
     >
       <HudClock />
@@ -206,7 +206,7 @@ export function AgentUplink({ runs }: { runs: UplinkRun[] }) {
       className="pointer-events-none absolute bottom-16 right-12 z-20 w-[420px] border border-hud-dim bg-black/85 backdrop-blur-md"
       style={{
         clipPath: "polygon(14px 0, 100% 0, 100% 100%, 0 100%, 0 14px)",
-        boxShadow: "0 0 26px rgba(0,217,255,0.14)",
+        boxShadow: "0 0 26px rgba(0,255,156,0.14)",
       }}
     >
       <div className="flex items-center justify-between border-b border-hud-dim px-3 py-1.5">
@@ -217,7 +217,7 @@ export function AgentUplink({ runs }: { runs: UplinkRun[] }) {
           {active.personaName ?? active.persona ?? "agent"}
           {active.ticketIdentifier ? ` · ${active.ticketIdentifier}` : ""}
           <span className="ml-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-hud align-middle"
-            style={{ boxShadow: "0 0 6px #00d9ff" }} />
+            style={{ boxShadow: "0 0 6px #00ff9c" }} />
         </span>
       </div>
       <div ref={scrollRef} className="max-h-[260px] overflow-y-auto px-3 py-2">
@@ -285,8 +285,8 @@ export function RunsSparkline({ recent }: { recent: RecentRun[] }) {
             <div
               style={{
                 height: h,
-                background: c === 0 ? "rgba(0,217,255,0.12)" : hasFail ? "#ff3b30" : "#00d9ff",
-                boxShadow: c > 0 ? `0 0 4px ${hasFail ? "rgba(255,59,48,0.8)" : "rgba(0,217,255,0.8)"}` : "none",
+                background: c === 0 ? "rgba(0,255,156,0.12)" : hasFail ? "#ff3b30" : "#00ff9c",
+                boxShadow: c > 0 ? `0 0 4px ${hasFail ? "rgba(255,59,48,0.8)" : "rgba(0,255,156,0.8)"}` : "none",
               }}
             />
           </div>

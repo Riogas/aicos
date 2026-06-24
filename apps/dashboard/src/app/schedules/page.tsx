@@ -1,7 +1,7 @@
 import { SchedulesClient } from "./client";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "AICOS · Programadas" };
+export const metadata = { title: "Matrix · Programadas" };
 
 export default function SchedulesPage() {
   return <SchedulesClient />;

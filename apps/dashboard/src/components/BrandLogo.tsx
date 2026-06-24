@@ -15,7 +15,7 @@ export function BrandLogo() {
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src="/aicos-logo.png"
-        alt="AICOS"
+        alt="Matrix"
         className="h-7 w-7 rounded-md object-contain"
         onError={() => setFailed(true)}
       />

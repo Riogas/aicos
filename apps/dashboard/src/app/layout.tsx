@@ -25,7 +25,7 @@ import { safeFetch, URLS } from "@/lib/fetcher";
 import { BrandLogo } from "@/components/BrandLogo";
 
 export const metadata: Metadata = {
-  title: "AICOS · Ops Dashboard",
+  title: "Matrix · Ops Dashboard",
   description: "AI Company OS — live ops view of routing, quota, learning, policy.",
 };
 

@@ -42,7 +42,7 @@ export default function LoginPage() {
         style={{
           clipPath:
             "polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px))",
-          boxShadow: "0 0 20px rgba(0,217,255,0.15)",
+          boxShadow: "0 0 20px rgba(0,255,156,0.15)",
         }}
       >
         <div className="font-mono text-[10px] uppercase tracking-widest text-hud glow-text">

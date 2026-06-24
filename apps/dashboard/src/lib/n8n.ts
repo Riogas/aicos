@@ -1,5 +1,5 @@
 /**
- * Integración con n8n (#10): disparar workflows desde AICOS.
+ * Integración con n8n (#10): disparar workflows desde Matrix.
  *
  * Config en ~/.config/aicos/n8n.json (mismo home montado → lo lee también el
  * bridge para disparos programáticos desde schedules/agentes):

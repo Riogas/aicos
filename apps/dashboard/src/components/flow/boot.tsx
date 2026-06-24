@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
  * skippable with click / any key. Pure theatre, ~2.6s.
  */
 const BOOT_LINES = [
-  "AICOS KERNEL v0.2 — INITIALIZING",
+  "MATRIX KERNEL v0.2 — INITIALIZING",
   "▸ LINK BRIDGE:7100 ............ OK",
   "▸ LINK PAPERCLIP:3100 ......... OK",
   "▸ QUOTA MANAGER ............... ARMED",
@@ -88,7 +88,7 @@ export function BootSequence() {
             className="h-full bg-hud"
             style={{
               width: `${(visibleLines / BOOT_LINES.length) * 100}%`,
-              boxShadow: "0 0 8px rgba(0,217,255,0.9)",
+              boxShadow: "0 0 8px rgba(0,255,156,0.9)",
               transition: "width 0.2s linear",
             }}
           />

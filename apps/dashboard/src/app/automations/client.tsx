@@ -61,7 +61,7 @@ export function AutomationsClient() {
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-fg">Automatizaciones (n8n)</h1>
-          <p className="mt-1 text-sm text-subtle">Dispará workflows de tu n8n desde AICOS — manual, programado o desde un agente.</p>
+          <p className="mt-1 text-sm text-subtle">Dispará workflows de tu n8n desde Matrix — manual, programado o desde un agente.</p>
         </div>
         {flash && <span className={`text-sm ${flash.ok ? "text-success" : "text-danger"}`}>{flash.text}</span>}
       </div>

@@ -45,7 +45,7 @@ export default function FlowPage() {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-hud opacity-75" />
             <span
               className="relative inline-flex h-1.5 w-1.5 rounded-full bg-hud"
-              style={{ boxShadow: "0 0 6px #00d9ff" }}
+              style={{ boxShadow: "0 0 6px #00ff9c" }}
             />
           </span>
           SIGNAL · ONLINE

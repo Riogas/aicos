@@ -162,10 +162,32 @@ export function slugifyProjectName(name: string): string {
 }
 
 /**
+ * Carpeta base donde se generan los proyectos nuevos (greenfield). Configurable
+ * desde el dashboard (/repos → "Carpeta de proyectos nuevos"), persistida en
+ * ~/.config/aicos/repos-config.json (mismo home montado que ven los agentes).
+ * Fallback: ~/Projects (comportamiento histórico) si no hay config.
+ */
+function projectsRootDir(): string {
+  const home = process.env.AICOS_HOST_HOME || process.env.HOME || homedir();
+  const cfgPath =
+    process.env.AICOS_REPOS_CONFIG || join(home, ".config", "aicos", "repos-config.json");
+  try {
+    const c = JSON.parse(readFileSync(cfgPath, "utf8")) as { projectsRoot?: string };
+    if (c.projectsRoot && typeof c.projectsRoot === "string" && c.projectsRoot.trim()) {
+      return c.projectsRoot;
+    }
+  } catch {
+    /* sin config → fallback */
+  }
+  return join(home, "Projects");
+}
+
+/**
  * GREENFIELD CONVENTION (regla del usuario): un proyecto SIN mapping explícito
  * en project-workspaces.json se resuelve automáticamente a
- * `~/Projects/<slug-del-nombre-del-proyecto>`. Así un proyecto nuevo arranca
- * con casa propia sin tener que mapearlo a mano primero.
+ * `<projectsRoot>/<slug-del-nombre-del-proyecto>` (projectsRoot configurable;
+ * default ~/Projects). Así un proyecto nuevo arranca con casa propia sin
+ * mapearlo a mano primero.
  *
  * Devuelve null si no hay nombre de proyecto (no podemos inventar un path).
  */
@@ -175,7 +197,7 @@ export function defaultGreenfieldWorkspace(
   if (!projectName || !projectName.trim()) return null;
   return {
     projectName,
-    cwd: join(homedir(), "Projects", slugifyProjectName(projectName)),
+    cwd: join(projectsRootDir(), slugifyProjectName(projectName)),
     gitRemote: null,
     defaultBranch: "main",
   };

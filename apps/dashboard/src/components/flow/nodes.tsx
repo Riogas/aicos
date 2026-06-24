@@ -38,7 +38,7 @@ function HexShell({
 }) {
   const toneColor =
     tone === "live"
-      ? "#00d9ff"
+      ? "#00ff9c"
       : tone === "warn"
         ? "#fbbf24"
         : tone === "err"
@@ -47,7 +47,7 @@ function HexShell({
             ? "#22c55e"
             : tone === "accent"
               ? "#a855f7"
-              : "rgba(0,217,255,0.4)";
+              : "rgba(0,255,156,0.4)";
   const innerOpacity = live ? 0.18 : critical ? 0.10 : 0.05;
   const glow = live
     ? `drop-shadow(0 0 10px ${toneColor}) drop-shadow(0 0 22px ${toneColor})`
@@ -191,7 +191,7 @@ function HandleStyled({
       position={position}
       id={id}
       className="!h-1.5 !w-1.5 !border-0 !bg-hud"
-      style={{ boxShadow: "0 0 4px rgba(0,217,255,0.9)" }}
+      style={{ boxShadow: "0 0 4px rgba(0,255,156,0.9)" }}
     />
   );
 }
@@ -257,7 +257,7 @@ export function PaperclipNode({ data }: NodeProps) {
  */
 export function BridgeNode({ data }: NodeProps) {
   const d = data as { healthy?: boolean; live?: boolean; agentCount?: number };
-  const color = d.live ? "#00d9ff" : d.healthy ? "#00d9ff" : "#ff3b30";
+  const color = d.live ? "#00ff9c" : d.healthy ? "#00ff9c" : "#ff3b30";
   const size = 130;
   return (
     <div className={`relative ${d.live ? "reactor-beat" : ""}`} style={{ width: size, height: size }}>
@@ -330,7 +330,7 @@ export function BridgeNode({ data }: NodeProps) {
 const RUN_STAGES = ["dispatched", "memory-retrieve", "quota-select", "cli-running", "posting-result", "done"];
 
 const DEPT_COLOR: Record<string, string> = {
-  IT: "#00d9ff",
+  IT: "#00ff9c",
   MK: "#fbbf24",
   RX: "#a855f7",
 };
@@ -346,7 +346,7 @@ export function WorkerNode({ data }: NodeProps) {
     stage?: string | null;
   };
   const tone: Tone = d.active ? "live" : d.success === false ? "err" : "idle";
-  const deptColor = DEPT_COLOR[d.department] ?? "#00d9ff";
+  const deptColor = DEPT_COLOR[d.department] ?? "#00ff9c";
   const stageIdx = d.stage ? RUN_STAGES.indexOf(d.stage) : -1;
   return (
     <>
@@ -413,7 +413,7 @@ export function ProviderNode({ data }: NodeProps) {
   };
   const tone: Tone = !d.available ? "err" : (d.pct ?? 0) >= 80 ? "warn" : d.active ? "live" : d.critical ? "accent" : "idle";
   const pct = Math.round(d.pct ?? 0);
-  const gaugeColor = pct >= 80 ? "#fbbf24" : "#00d9ff";
+  const gaugeColor = pct >= 80 ? "#fbbf24" : "#00ff9c";
   const R = 9;
   const CIRC = 2 * Math.PI * R;
   // Tooltip clarifies that the bar is a LOCAL counter, not the real session
@@ -425,7 +425,7 @@ export function ProviderNode({ data }: NodeProps) {
         <div className="flex w-full items-center gap-2" title={tooltip}>
           {/* Radial quota gauge */}
           <svg width={26} height={26} viewBox="0 0 26 26" className="shrink-0">
-            <circle cx={13} cy={13} r={R} fill="none" stroke="rgba(0,217,255,0.15)" strokeWidth={2.5} />
+            <circle cx={13} cy={13} r={R} fill="none" stroke="rgba(0,255,156,0.15)" strokeWidth={2.5} />
             <circle
               className="gauge-arc"
               cx={13}

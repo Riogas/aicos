@@ -312,7 +312,7 @@ export function NarrationFeed({ cards }: { cards: ActiveEvent[] }) {
 
 function NarrationCard({ event, index }: { event: ActiveEvent; index: number }) {
   const tones = {
-    live: { border: "border-hud", text: "text-hud", glow: "rgba(0,217,255,0.35)" },
+    live: { border: "border-hud", text: "text-hud", glow: "rgba(0,255,156,0.35)" },
     ok: { border: "border-success/60", text: "text-success", glow: "rgba(34,197,94,0.35)" },
     warn: { border: "border-warning/60", text: "text-warning", glow: "rgba(245,158,11,0.35)" },
     err: { border: "border-alert/60", text: "text-alert", glow: "rgba(255,59,48,0.35)" },

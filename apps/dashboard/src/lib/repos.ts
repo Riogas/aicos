@@ -10,7 +10,12 @@ import { join, dirname, resolve } from "node:path";
 const HOME = process.env.AICOS_HOST_HOME || process.env.HOME || "/home/vagrant";
 const CONFIG_PATH = process.env.AICOS_REPOS_CONFIG || join(HOME, ".config", "aicos", "repos-config.json");
 
-export interface RepoConfig { root: string }
+export interface RepoConfig { root: string; projectsRoot: string }
+
+// Carpeta base donde los proyectos NUEVOS (greenfield) se generan como
+// subcarpetas: <projectsRoot>/<slug>. El bridge (registry.ts) lee el mismo
+// archivo de config para resolver el cwd de un proyecto sin mapping explícito.
+const DEFAULT_PROJECTS_ROOT = join(HOME, "Projects");
 export interface RepoInfo {
   name: string;
   path: string;
@@ -21,15 +26,32 @@ export interface RepoInfo {
 }
 
 export function getConfig(): RepoConfig {
-  try { return { root: JSON.parse(readFileSync(CONFIG_PATH, "utf8")).root || HOME }; }
-  catch { return { root: HOME }; }
+  try {
+    const c = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    return { root: c.root || HOME, projectsRoot: c.projectsRoot || DEFAULT_PROJECTS_ROOT };
+  } catch { return { root: HOME, projectsRoot: DEFAULT_PROJECTS_ROOT }; }
+}
+
+function writeConfig(cfg: RepoConfig): void {
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+  writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 
 export function setRoot(root: string): RepoConfig {
-  const r = resolve(root);
-  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify({ root: r }, null, 2));
-  return { root: r };
+  const cur = getConfig();
+  const cfg = { root: resolve(root), projectsRoot: cur.projectsRoot };
+  writeConfig(cfg);
+  return cfg;
+}
+
+export function setProjectsRoot(projectsRoot: string): RepoConfig {
+  const cur = getConfig();
+  const p = resolve(projectsRoot);
+  const cfg = { root: cur.root, projectsRoot: p };
+  // creamos la carpeta de proyectos así existe antes del primer proyecto nuevo
+  try { mkdirSync(p, { recursive: true }); } catch { /* */ }
+  writeConfig(cfg);
+  return cfg;
 }
 
 function detectKind(p: string): { kind: string; description?: string } {

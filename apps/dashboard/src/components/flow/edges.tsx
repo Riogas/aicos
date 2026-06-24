@@ -30,8 +30,8 @@ export function AnimatedEdge({
   const d = (data as unknown as AnimatedEdgeData) ?? {};
 
   const colorMap = {
-    idle: "rgba(0,217,255,0.18)",
-    live: "#00d9ff",
+    idle: "rgba(0,255,156,0.18)",
+    live: "#00ff9c",
     warn: "#fbbf24",
     err: "#ff3b30",
     accent: "#a855f7",

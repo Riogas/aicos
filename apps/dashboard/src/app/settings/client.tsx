@@ -95,7 +95,7 @@ export function SettingsClient() {
   return (
     <div className="mx-auto max-w-2xl">
       <h1 className="text-xl font-semibold tracking-tight text-fg">Ajustes</h1>
-      <p className="mt-1 text-sm text-subtle">Configuración del sistema AICOS.</p>
+      <p className="mt-1 text-sm text-subtle">Configuración del sistema Matrix.</p>
 
       <section className="mt-8 rounded-xl border border-border bg-surface/40 p-6">
         <div className="flex items-center justify-between">
@@ -115,7 +115,7 @@ export function SettingsClient() {
             <input className={inp} type="password" autoComplete="off"
               placeholder={cfg.hasToken ? `Guardado (${cfg.tokenHint}) — dejá vacío para no cambiarlo` : "123456:ABC-DEF…"}
               value={token} onChange={(e) => setToken(e.target.value)} />
-            <p className="mt-1 text-2xs text-subtle">Lo creás con @BotFather en Telegram. Es un solo bot general para todo AICOS.</p>
+            <p className="mt-1 text-2xs text-subtle">Lo creás con @BotFather en Telegram. Es un solo bot general para todo Matrix.</p>
           </div>
 
           <div>

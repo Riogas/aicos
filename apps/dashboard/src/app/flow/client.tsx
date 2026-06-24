@@ -352,7 +352,7 @@ export function FlowViewer() {
           markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(255,255,255,0.4)" },
         }}
       >
-        <Background gap={48} size={1} color="rgba(0,217,255,0.08)" />
+        <Background gap={48} size={1} color="rgba(0,255,156,0.08)" />
         <Controls showInteractive={false} />
 
         {/* Depth vignette over the graph, under the panels */}
@@ -386,7 +386,7 @@ export function FlowViewer() {
             className="pointer-events-none absolute right-12 top-16 z-20 min-w-[220px] border border-hud-dim bg-black/85 px-3 py-2.5 backdrop-blur-md"
             style={{
               clipPath: "polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))",
-              boxShadow: "0 0 20px rgba(0,217,255,0.15)",
+              boxShadow: "0 0 20px rgba(0,255,156,0.15)",
             }}
           >
             <div className="flex items-center justify-between">
@@ -476,7 +476,7 @@ export function FlowViewer() {
             className="pointer-events-none absolute right-12 top-72 z-20 min-w-[220px] max-w-[280px] border border-hud-dim bg-black/85 px-3 py-2.5 backdrop-blur-md"
             style={{
               clipPath: "polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))",
-              boxShadow: "0 0 20px rgba(0,217,255,0.15)",
+              boxShadow: "0 0 20px rgba(0,255,156,0.15)",
             }}
           >
             <div className="font-mono text-[8.5px] uppercase tracking-widest text-hud glow-text">

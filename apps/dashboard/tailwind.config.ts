@@ -22,9 +22,9 @@ const config: Config = {
         ghost: "#52525b",       // zinc-600
 
         // Single brand accent + semantic tokens
-        accent: "#3b82f6",      // blue-500
-        "accent-soft": "rgba(59,130,246,0.12)",
-        "accent-ring": "rgba(59,130,246,0.30)",
+        accent: "#00e676",      // blue-500
+        "accent-soft": "rgba(0,230,118,0.12)",
+        "accent-ring": "rgba(0,230,118,0.30)",
 
         success: "#22c55e",     // green-500
         "success-soft": "rgba(34,197,94,0.12)",
@@ -35,11 +35,11 @@ const config: Config = {
         violet: "#a855f7",
         "violet-soft": "rgba(168,85,247,0.12)",
         // ─── Iron Man / JARVIS palette ───
-        hud: "#00d9ff",
-        "hud-dim": "rgba(0,217,255,0.35)",
-        "hud-soft": "rgba(0,217,255,0.10)",
-        "hud-glow": "rgba(0,217,255,0.55)",
-        "hud-ring": "rgba(0,217,255,0.25)",
+        hud: "#00ff9c",
+        "hud-dim": "rgba(0,255,156,0.35)",
+        "hud-soft": "rgba(0,255,156,0.10)",
+        "hud-glow": "rgba(0,255,156,0.55)",
+        "hud-ring": "rgba(0,255,156,0.25)",
         gold: "#fbbf24",
         "gold-dim": "rgba(251,191,36,0.5)",
         "gold-soft": "rgba(251,191,36,0.10)",
@@ -61,11 +61,11 @@ const config: Config = {
         // soft inner top highlight + outer drop — gives layered "raised card" feel
         card: "inset 0 1px 0 0 rgba(255,255,255,0.04), 0 1px 2px 0 rgba(0,0,0,0.4)",
         "card-hover": "inset 0 1px 0 0 rgba(255,255,255,0.06), 0 4px 12px -2px rgba(0,0,0,0.5)",
-        glow: "0 0 0 1px rgba(59,130,246,0.25), 0 4px 24px -4px rgba(59,130,246,0.18)",
+        glow: "0 0 0 1px rgba(0,230,118,0.25), 0 4px 24px -4px rgba(0,230,118,0.18)",
       },
       backgroundImage: {
         "grid-fade":
-          "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59,130,246,0.12), transparent 60%)",
+          "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,230,118,0.12), transparent 60%)",
         "card-bevel":
           "linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0) 100%)",
       },
