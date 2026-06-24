@@ -4,8 +4,9 @@
  * ~/.config/aicos/repos-config.json (mismo home montado que ven los agentes, así
  * los paths sirven dentro del container).
  */
-import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join, dirname, resolve, basename } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const HOME = process.env.AICOS_HOST_HOME || process.env.HOME || "/home/vagrant";
 const CONFIG_PATH = process.env.AICOS_REPOS_CONFIG || join(HOME, ".config", "aicos", "repos-config.json");
@@ -52,6 +53,61 @@ export function setProjectsRoot(projectsRoot: string): RepoConfig {
   try { mkdirSync(p, { recursive: true }); } catch { /* */ }
   writeConfig(cfg);
   return cfg;
+}
+
+/** Nombre de carpeta seguro a partir de la URL del repo (último segmento sin .git). */
+function leafFromUrl(url: string): string {
+  let s = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  s = s.split(/[/:]/).pop() || "";
+  return s;
+}
+
+/** Quita credenciales embebidas de una URL https (user:token@host → host). */
+function stripCreds(url: string): string {
+  return url.replace(/^(https?:\/\/)[^/@]+@/i, "$1");
+}
+
+export interface CloneResult { ok: true; path: string; name: string }
+
+/**
+ * Clona un repo git DENTRO de la carpeta de proyectos como subcarpeta:
+ * <projectsRoot>/<name>. Corre como el usuario del proceso (el dashboard ya
+ * corre como uid 1000 = el mismo de los agentes), así el clon queda con el
+ * dueño correcto. Si la URL trae token (user:token@), lo limpiamos del
+ * `origin` tras clonar para no dejar el secreto en .git/config.
+ */
+export function cloneRepo(url: string, name?: string): CloneResult {
+  const u = (url || "").trim();
+  if (!/^(https?:\/\/|git@)/i.test(u)) {
+    throw new Error("URL inválida — usá https://… o git@…");
+  }
+  const { projectsRoot } = getConfig();
+  const rawLeaf = (name && name.trim()) || leafFromUrl(u);
+  const leaf = rawLeaf.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  if (!leaf) throw new Error("no pude derivar un nombre de carpeta válido");
+  const target = join(projectsRoot, leaf);
+  // anti path-traversal: el target tiene que colgar directo de projectsRoot
+  if (dirname(resolve(target)) !== resolve(projectsRoot) || basename(target) !== leaf) {
+    throw new Error("ruta destino inválida");
+  }
+  if (existsSync(target)) throw new Error(`ya existe una carpeta «${leaf}» en proyectos`);
+  mkdirSync(projectsRoot, { recursive: true });
+
+  const r = spawnSync("git", ["clone", u, target], {
+    encoding: "utf8",
+    timeout: 240_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  if (r.status !== 0) {
+    try { rmSync(target, { recursive: true, force: true }); } catch { /* */ }
+    const msg = (r.stderr || r.error?.message || "git clone falló").trim().split("\n").slice(-3).join(" ");
+    throw new Error(msg);
+  }
+  // si la URL traía credenciales, dejamos el origin limpio (sin token)
+  if (u !== stripCreds(u)) {
+    spawnSync("git", ["-C", target, "remote", "set-url", "origin", stripCreds(u)], { encoding: "utf8" });
+  }
+  return { ok: true, path: target, name: leaf };
 }
 
 function detectKind(p: string): { kind: string; description?: string } {

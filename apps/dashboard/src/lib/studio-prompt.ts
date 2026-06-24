@@ -5,8 +5,29 @@
  * cuando hay acuerdo, emite una spec ejecutable en un bloque ```aicos-spec```
  * que el dashboard parsea para crear proyecto/tickets en Paperclip.
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+
+const CEO_INSTRUCTIONS_PATH =
+  process.env.AICOS_CEO_INSTRUCTIONS ||
+  join(process.env.AICOS_HOST_HOME || process.env.HOME || "/home/vagrant", ".config", "aicos", "ceo-instructions.json");
+
+/** Instrucciones permanentes del operador para el CEO (Strategy Room). */
+export function getCeoInstructions(): string {
+  try {
+    const c = JSON.parse(readFileSync(CEO_INSTRUCTIONS_PATH, "utf8")) as { instructions?: string };
+    return typeof c.instructions === "string" ? c.instructions : "";
+  } catch {
+    return "";
+  }
+}
+
+export function setCeoInstructions(instructions: string): string {
+  const text = (instructions || "").slice(0, 8000);
+  mkdirSync(dirname(CEO_INSTRUCTIONS_PATH), { recursive: true });
+  writeFileSync(CEO_INSTRUCTIONS_PATH, JSON.stringify({ instructions: text }, null, 2));
+  return text;
+}
 
 export interface RosterAgent {
   id: string;
@@ -51,7 +72,8 @@ const PERSONA: Record<Interlocutor, string> = {
  * System prompt completo de la sesión. Incluye el rol, la metodología de
  * brainstorming, el roster real de agentes y el contrato del bloque de spec.
  */
-export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canReadRepo: boolean): string {
+export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canReadRepo: boolean, customInstructions?: string): string {
+  const custom = (customInstructions || "").trim();
   const rosterLines = roster.length
     ? roster.map((a) => `- \`${a.id}\` — **${a.name}** (${a.department})${a.capabilities ? `: ${a.capabilities}` : ""}`).join("\n")
     : "- (no pude leer el registry; pedile al operador los ids de agentes si necesitás asignar)";
@@ -59,6 +81,15 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
   return [
     PERSONA[who],
     "",
+    ...(custom
+      ? [
+          "# INSTRUCCIONES DEL OPERADOR (máxima prioridad — mandan sobre todo lo de abajo)",
+          "El operador definió cómo querés que te comportes y respondas SIEMPRE. Respetalas al pie:",
+          "",
+          custom,
+          "",
+        ]
+      : []),
     "# Tu misión en esta sala (Strategy Room)",
     "Estás en una sesión de trabajo 1-a-1 con el operador de AICOS. El objetivo es " +
       "convertir una idea suya (un feature, fix, mejora, proyecto, lo que sea) en una " +

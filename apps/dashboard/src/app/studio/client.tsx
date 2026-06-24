@@ -129,6 +129,11 @@ export function StudioClient() {
   const [uploading, setUploading] = useState(false);
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [showPlaybooks, setShowPlaybooks] = useState(false);
+  const [showCfg, setShowCfg] = useState(false);
+  const [ceoInstr, setCeoInstr] = useState("");
+  const [draftInstr, setDraftInstr] = useState("");
+  const [savingCfg, setSavingCfg] = useState(false);
+  const [flashCfg, setFlashCfg] = useState<string | null>(null);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -152,6 +157,7 @@ export function StudioClient() {
     }).catch(() => {});
     fetch("/api/repos").then((x) => x.json()).then((d: { repos: { name: string; path: string }[] }) => setRepos(d.repos || [])).catch(() => {});
     fetch("/api/playbooks").then((x) => x.json()).then((d: { playbooks: Playbook[] }) => setPlaybooks(d.playbooks || [])).catch(() => {});
+    fetch("/api/studio/instructions").then((x) => x.json()).then((d: { instructions: string }) => { setCeoInstr(d.instructions || ""); setDraftInstr(d.instructions || ""); }).catch(() => {});
     loadConvs();
   }, [loadConvs]);
 
@@ -179,6 +185,16 @@ export function StudioClient() {
     setMessages([]); setSessionId(null); setApplyRes(null); setBusy(false);
     setAttachments([]);
     setConvId(genId());
+  };
+
+  const saveCfg = async () => {
+    setSavingCfg(true); setFlashCfg(null);
+    try {
+      const res = await fetch("/api/studio/instructions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instructions: draftInstr }) });
+      const d = await res.json();
+      if (d.ok) { setCeoInstr(d.instructions || ""); setFlashCfg("Guardado ✓ — aplica a las conversaciones nuevas."); }
+      else setFlashCfg(d.error || "error");
+    } catch { setFlashCfg("error de red"); } finally { setSavingCfg(false); }
   };
 
   const usePlaybook = (pb: Playbook) => {
@@ -336,6 +352,7 @@ export function StudioClient() {
               )}
             </div>
           )}
+          <button className="sr-pb-btn" onClick={() => setShowCfg((s) => !s)} disabled={busy} title="Instrucciones permanentes del CEO">⚙ CEO</button>
           <Seg<Who> value={who} onChange={(v) => { setWho(v); newConv(); }} options={[{ k: "ceo", label: "CEO" }, { k: "hermes", label: "Hermes" }]} disabled={busy} />
           <Seg<ModelKey> value={model} onChange={setModel} options={[{ k: "opus", label: "Opus 4.8" }, { k: "sonnet", label: "Sonnet 4.6" }]} disabled={busy} />
           {repos.length > 0 && (
@@ -346,6 +363,29 @@ export function StudioClient() {
           )}
         </div>
       </div>
+
+      {showCfg && (
+        <div className="mx-3 mb-2 rounded-xl border border-hud/30 bg-surface/60 p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-fg">⚙ Instrucciones permanentes del CEO</h2>
+            <button className="text-xs text-subtle hover:text-fg" onClick={() => setShowCfg(false)}>cerrar ✕</button>
+          </div>
+          <p className="mt-1 text-2xs text-subtle">
+            Cómo querés que el CEO se comporte y responda <b>siempre</b> en la Strategy Room. Se inyecta como instrucción de máxima prioridad al inicio de cada conversación nueva (las ya abiertas no cambian; empezá una nueva para que tome el cambio).
+          </p>
+          <textarea
+            className="mt-3 h-44 w-full resize-y rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus:border-hud/40"
+            value={draftInstr}
+            onChange={(e) => setDraftInstr(e.target.value)}
+            placeholder={"Ej: Respondé siempre en español rioplatense, conciso y directo.\nAntes de proponer una spec hacé como máximo 3 preguntas clave.\nPriorizá soluciones de bajo costo y rápidas de implementar.\nNo uses tecnicismos sin explicarlos.\nCerrá siempre con próximos pasos concretos."}
+          />
+          <div className="mt-2 flex items-center gap-3">
+            <button onClick={saveCfg} disabled={savingCfg || draftInstr === ceoInstr} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{savingCfg ? "Guardando…" : "Guardar"}</button>
+            {draftInstr !== ceoInstr && !savingCfg && <span className="text-2xs text-subtle">cambios sin guardar</span>}
+            {flashCfg && <span className="text-sm text-success">{flashCfg}</span>}
+          </div>
+        </div>
+      )}
 
       <div className="sr-grid">
         {/* sidebar historial */}

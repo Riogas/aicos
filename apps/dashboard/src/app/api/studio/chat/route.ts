@@ -15,7 +15,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { buildSystemPrompt, loadRoster, type Interlocutor } from "@/lib/studio-prompt";
+import { buildSystemPrompt, loadRoster, getCeoInstructions, type Interlocutor } from "@/lib/studio-prompt";
 import { scanRepos, getConfig, isUnderRoot } from "@/lib/repos";
 
 /** Lista de repos disponibles + el seleccionado, para el system prompt del CEO. */
@@ -159,7 +159,9 @@ export async function POST(req: Request) {
     const roster = loadRoster();
     const memCtx = await retrieveMemoryContext(message);
     const repoCtx = buildRepoContext(repoPath);
-    args.push("--append-system-prompt", buildSystemPrompt(who, roster, CAN_READ_REPO) + repoCtx + memCtx);
+    // instrucciones permanentes del operador para el CEO (Strategy Room)
+    const ceoInstr = who === "ceo" ? getCeoInstructions() : "";
+    args.push("--append-system-prompt", buildSystemPrompt(who, roster, CAN_READ_REPO, ceoInstr) + repoCtx + memCtx);
   }
 
   const encoder = new TextEncoder();

@@ -21,6 +21,10 @@ export function ReposClient() {
   const [projectsRoot, setProjectsRoot] = useState("");
   const [draftProjects, setDraftProjects] = useState("");
   const [flashP, setFlashP] = useState<string | null>(null);
+  const [cloneUrl, setCloneUrl] = useState("");
+  const [cloneName, setCloneName] = useState("");
+  const [cloning, setCloning] = useState(false);
+  const [flashC, setFlashC] = useState<string | null>(null);
 
   const load = () => fetch("/api/repos").then((r) => r.json()).then((d) => { setRoot(d.root); setDraftRoot(d.root); setProjectsRoot(d.projectsRoot || ""); setDraftProjects(d.projectsRoot || ""); setRepos(d.repos || []); }).catch(() => {});
   useEffect(() => { load(); }, []);
@@ -39,6 +43,21 @@ export function ReposClient() {
     const d = await r.json();
     if (d.ok) { setProjectsRoot(d.projectsRoot); setFlashP(`Guardado. Los proyectos nuevos se crean en ${d.projectsRoot}/<nombre>.`); }
     else setFlashP(d.error || "error");
+  };
+
+  const doClone = async () => {
+    setFlashC(null);
+    if (!cloneUrl.trim()) { setFlashC("Pegá una URL de git."); return; }
+    setCloning(true);
+    try {
+      const r = await fetch("/api/repos/clone", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: cloneUrl, name: cloneName }) });
+      const d = await r.json();
+      if (d.ok) {
+        setCloneUrl(""); setCloneName("");
+        setRoot(d.root); setDraftRoot(d.root); setRepos(d.repos || []); setSel(null); setDetail(null);
+        setFlashC(`✓ Clonado en ${d.path}`);
+      } else setFlashC(d.error || "error");
+    } catch { setFlashC("error de red"); } finally { setCloning(false); }
   };
 
   const open = async (repo: Repo) => {
@@ -75,6 +94,21 @@ export function ReposClient() {
           <input className={inp + " flex-1 min-w-[280px] font-mono"} value={draftProjects} onChange={(e) => setDraftProjects(e.target.value)} placeholder="/home/riogas/Projects" />
           <button onClick={saveProjects} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white">Guardar</button>
           {flashP && <span className="text-sm text-success">{flashP}</span>}
+        </div>
+
+        {/* Clonar app desde una URL de git */}
+        <div className="mt-5 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold text-fg">Clonar app</h3>
+          <p className="mt-1 text-2xs text-subtle">
+            Pegá la URL del repo y se clona como subcarpeta dentro de la carpeta de proyectos. Para repos privados, incluí el token en la URL
+            (<span className="font-mono">https://x-access-token:TU_PAT@github.com/org/app.git</span>) — lo limpiamos del remoto tras clonar.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input className={inp + " flex-1 min-w-[320px] font-mono"} value={cloneUrl} onChange={(e) => setCloneUrl(e.target.value)} placeholder="https://github.com/org/app.git" disabled={cloning} />
+            <input className={inp + " w-44 font-mono"} value={cloneName} onChange={(e) => setCloneName(e.target.value)} placeholder="carpeta (opcional)" disabled={cloning} />
+            <button onClick={doClone} disabled={cloning} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{cloning ? "Clonando…" : "Clonar"}</button>
+          </div>
+          {flashC && <span className="mt-2 block text-sm text-success">{flashC}</span>}
         </div>
       </div>
 
