@@ -151,6 +151,9 @@ export async function POST(req: Request) {
     "--verbose",
     "--model", modelAlias(body.model),
     "--dangerously-skip-permissions",
+    // CEO/Hermes del Strategy Room = planificadores: solo inspeccionan (Read/Grep/Glob)
+    // y emiten la spec. Se niegan tools de escritura/Bash para que no implementen.
+    "--disallowedTools", "Write,Edit,NotebookEdit,Bash",
   ];
   if (existsSync(MCP_CONFIG)) args.push("--mcp-config", MCP_CONFIG);
   if (sessionId) {
