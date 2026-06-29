@@ -23,11 +23,15 @@ interface AicosSpec {
   tasks?: SpecTask[];
 }
 interface Attachment { path: string; name: string; type?: string; size?: number }
+interface DecisionOption { label: string; description?: string; recommended?: boolean }
+interface Decision { question: string; options: DecisionOption[]; multi?: boolean }
 interface Msg {
   id: number;
   role: "user" | "agent";
   text: string;
   spec?: AicosSpec;
+  decisions?: Decision[];
+  decided?: boolean;
   streaming?: boolean;
   attachments?: Attachment[];
 }
@@ -65,6 +69,61 @@ function extractSpec(text: string): { spec?: AicosSpec; clean: string } {
   } catch {
     return { clean: text };
   }
+}
+
+// ── extrae TODOS los bloques ```aicos-decision``` (opciones clickeables) ───────
+function extractDecisions(text: string): { decisions?: Decision[]; clean: string } {
+  const re = /```aicos-decision\s*([\s\S]*?)```/g;
+  const decisions: Decision[] = [];
+  let clean = text;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const d = JSON.parse(m[1].trim()) as Decision;
+      if (d && d.question && Array.isArray(d.options) && d.options.length) {
+        decisions.push(d);
+        clean = clean.replace(m[0], "").trim();
+      }
+    } catch { /* bloque mal formado → lo dejamos como texto */ }
+  }
+  return decisions.length ? { decisions, clean } : { clean: text };
+}
+
+// ── tarjeta de decisión: opciones clickeables (estilo consola) ────────────────
+function DecisionBlock({ d, disabled, onPick }: { d: Decision; disabled?: boolean; onPick: (labels: string[]) => void }) {
+  const [sel, setSel] = useState<string[]>([]);
+  const multi = !!d.multi;
+  const click = (label: string) => {
+    if (disabled) return;
+    if (multi) setSel((s) => (s.includes(label) ? s.filter((x) => x !== label) : [...s, label]));
+    else onPick([label]);
+  };
+  return (
+    <div className="sr-decision">
+      <div className="sr-decision-q">{d.question}</div>
+      <div className="sr-decision-opts">
+        {d.options.map((o, i) => (
+          <button
+            key={i}
+            type="button"
+            className={`sr-decision-opt${o.recommended ? " rec" : ""}${multi && sel.includes(o.label) ? " on" : ""}`}
+            disabled={disabled}
+            onClick={() => click(o.label)}
+          >
+            <span className="sr-decision-lbl">
+              {multi ? (sel.includes(o.label) ? "☑ " : "☐ ") : ""}{o.label}{o.recommended ? " ★" : ""}
+            </span>
+            {o.description && <span className="sr-decision-desc">{o.description}</span>}
+          </button>
+        ))}
+      </div>
+      {multi && (
+        <button type="button" className="sr-decision-send" disabled={disabled || !sel.length} onClick={() => onPick(sel)}>
+          Enviar selección{sel.length ? ` (${sel.length})` : ""}
+        </button>
+      )}
+    </div>
+  );
 }
 
 // ── markdown liviano ──────────────────────────────────────────────────────────
@@ -245,11 +304,13 @@ export function StudioClient() {
     loadConvs();
   };
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    const atts = attachments;
+  const send = useCallback(async (override?: string) => {
+    const isOverride = typeof override === "string";
+    const text = (isOverride ? override : input).trim();
+    const atts = isOverride ? [] : attachments;
     if ((!text && atts.length === 0) || busy || uploading) return;
-    setInput(""); setApplyRes(null); setAttachments([]);
+    setApplyRes(null);
+    if (!isOverride) { setInput(""); setAttachments([]); }
     const base = r.current.messages;
     const userMsg: Msg = { id: ++idRef.current, role: "user", text, attachments: atts.length ? atts : undefined };
     const agentMsg: Msg = { id: ++idRef.current, role: "agent", text: "", streaming: true };
@@ -289,7 +350,8 @@ export function StudioClient() {
         }
       }
       const { spec, clean } = extractSpec(acc);
-      const finalAgent: Msg = { ...agentMsg, text: clean || acc, spec, streaming: false };
+      const { decisions, clean: clean2 } = extractDecisions(clean);
+      const finalAgent: Msg = { ...agentMsg, text: clean2 || clean || acc, spec, decisions, streaming: false };
       const finalMsgs = [...base, userMsg, finalAgent];
       setMessages(finalMsgs);
       persist(finalMsgs, localSession);
@@ -311,6 +373,13 @@ export function StudioClient() {
       setApplying(false);
     }
   };
+
+  // click en una opción de decisión → la manda como respuesta y marca la tarjeta como resuelta
+  const pickOption = useCallback((msgId: number, labels: string[]) => {
+    if (busy || !labels.length) return;
+    setMessages((m) => m.map((x) => (x.id === msgId ? { ...x, decided: true } : x)));
+    void send(labels.join(", "));
+  }, [busy, send]);
 
   // agrupar conversaciones por día
   const grouped = useMemo(() => {
@@ -431,6 +500,13 @@ export function StudioClient() {
                     </div>
                   )}
                   {m.streaming && <span className="sr-cursor" />}
+                  {m.decisions && m.decisions.length > 0 && (
+                    <div className="sr-decisions">
+                      {m.decisions.map((d, i) => (
+                        <DecisionBlock key={i} d={d} disabled={m.decided || busy} onPick={(labels) => pickOption(m.id, labels)} />
+                      ))}
+                    </div>
+                  )}
                   {m.spec && <div className="sr-spec-chip">✦ Spec generada — ver panel →</div>}
                 </div>
               </div>
@@ -465,7 +541,7 @@ export function StudioClient() {
                 rows={2}
                 disabled={busy}
               />
-              <button className="sr-send" onClick={send} disabled={busy || uploading || (!input.trim() && attachments.length === 0)}>{busy ? "…" : "Enviar"}</button>
+              <button className="sr-send" onClick={() => send()} disabled={busy || uploading || (!input.trim() && attachments.length === 0)}>{busy ? "…" : "Enviar"}</button>
             </div>
           </div>
         </div>

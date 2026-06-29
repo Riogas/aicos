@@ -193,3 +193,19 @@
 .sr-result.err { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); color: #fecaca; }
 .sr-result a { color: #00ff9c; display: inline-block; margin-top: 6px; }
 .sr-warns { margin-top: 8px; padding-left: 16px; color: #fbbf24; font-size: 11.5px; }
+
+/* ── decisiones clickeables (estilo consola) ──────────────────────────── */
+.sr-decisions { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.sr-decision { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 11px 12px; background: rgba(255,255,255,.02); }
+.sr-decision-q { font-size: 13px; font-weight: 600; margin-bottom: 9px; color: #e8e8ea; }
+.sr-decision-opts { display: flex; flex-direction: column; gap: 7px; }
+.sr-decision-opt { text-align: left; display: flex; flex-direction: column; gap: 2px; width: 100%; cursor: pointer; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.03); color: #d7d7db; padding: 8px 11px; border-radius: 9px; transition: border-color .12s, background .12s, transform .04s; }
+.sr-decision-opt:hover:not(:disabled) { border-color: rgba(0,255,156,.5); background: rgba(0,255,156,.06); }
+.sr-decision-opt:active:not(:disabled) { transform: translateY(1px); }
+.sr-decision-opt:disabled { opacity: .5; cursor: default; }
+.sr-decision-opt.rec { border-color: rgba(0,255,156,.35); }
+.sr-decision-opt.on { border-color: rgba(0,255,156,.7); background: rgba(0,255,156,.1); }
+.sr-decision-lbl { font-size: 13px; font-weight: 600; }
+.sr-decision-desc { font-size: 11.5px; color: #9a9aa0; line-height: 1.35; }
+.sr-decision-send { margin-top: 9px; cursor: pointer; border: 1px solid rgba(0,255,156,.4); background: rgba(0,255,156,.1); color: #00ff9c; font-weight: 600; font-size: 12.5px; padding: 7px 14px; border-radius: 9px; }
+.sr-decision-send:disabled { opacity: .45; cursor: default; }

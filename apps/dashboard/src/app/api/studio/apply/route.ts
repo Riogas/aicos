@@ -9,8 +9,10 @@
  * Body: { spec: AicosSpec }
  * Respuesta: { ok, projectId?, parent:{id,identifier}, created:[{ref,identifier,id,agentId}] , warnings:[] }
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { getConfig } from "@/lib/repos";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,11 +32,116 @@ interface SpecTask {
   dependsOn?: string[];
   subtasks?: SpecTask[];
 }
+interface SpecPhase {
+  phase?: string;
+  title?: string;
+  items?: string[];
+}
+interface SpecDecision {
+  question?: string;
+  choice?: string;
+  rationale?: string;
+}
 interface AicosSpec {
   title?: string;
   summary?: string;
   newProject?: { name: string; description?: string } | null;
+  toolsNeeded?: string[];
+  connectionsNeeded?: string[];
   tasks?: SpecTask[];
+  roadmap?: SpecPhase[];
+  decisions?: SpecDecision[];
+}
+
+/** Slug igual al del bridge (registry.ts) → los docs caen en la MISMA carpeta donde el agente construye. */
+function slugifyProjectName(name: string): string {
+  const slug = name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return slug || "project";
+}
+
+function renderSpecMd(s: AicosSpec): string {
+  const lines: string[] = [`# ${s.title || "Spec"}`, ""];
+  if (s.summary) lines.push(s.summary, "");
+  if (s.newProject?.name)
+    lines.push(`**Proyecto:** ${s.newProject.name}${s.newProject.description ? ` — ${s.newProject.description}` : ""}`, "");
+  if (s.toolsNeeded?.length) lines.push(`**Tools necesarias:** ${s.toolsNeeded.join(", ")}`, "");
+  if (s.connectionsNeeded?.length) lines.push(`**Conexiones necesarias:** ${s.connectionsNeeded.join(", ")}`, "");
+  lines.push("## Tareas", "");
+  const walk = (t: SpecTask, depth: number) => {
+    const ind = "  ".repeat(depth);
+    lines.push(
+      `${ind}- **${t.title}**${t.agentId ? ` _(${t.agentId})_` : ""}${t.dependsOn?.length ? ` — depende de: ${t.dependsOn.join(", ")}` : ""}`,
+    );
+    if (t.description) lines.push(`${ind}  ${t.description}`);
+    for (const st of t.subtasks || []) walk(st, depth + 1);
+  };
+  for (const t of s.tasks || []) walk(t, 0);
+  lines.push("", "_Generado por la Strategy Room (AICOS) al crear en Paperclip._");
+  return lines.join("\n") + "\n";
+}
+
+function renderRoadmapMd(s: AicosSpec): string {
+  const lines: string[] = ["# Roadmap post-MVP", ""];
+  if (!s.roadmap?.length) lines.push("_(Sin fases futuras registradas todavía.)_");
+  else
+    for (const ph of s.roadmap) {
+      lines.push(`## ${[ph.phase, ph.title].filter(Boolean).join(" — ") || "Fase"}`);
+      for (const it of ph.items || []) lines.push(`- ${it}`);
+      lines.push("");
+    }
+  return lines.join("\n") + "\n";
+}
+
+function renderDecisionsMd(s: AicosSpec): string {
+  const lines: string[] = ["# Decision log", ""];
+  if (!s.decisions?.length) lines.push("_(Sin decisiones registradas.)_");
+  else
+    for (const d of s.decisions) {
+      lines.push(`### ${d.question || "Decisión"}`);
+      lines.push(`- **Elegido:** ${d.choice || "—"}`);
+      if (d.rationale) lines.push(`- **Por qué:** ${d.rationale}`);
+      lines.push("");
+    }
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Persiste el rastro del trabajo EN el proyecto: docs/SPEC.md + ROADMAP.md + DECISIONS.md,
+ * en <projectsRoot>/<slug> (misma carpeta donde el agente buildea), y commitea. Best-effort:
+ * cualquier fallo se reporta como warning, no rompe la creación de tickets.
+ */
+function writeProjectDocs(spec: AicosSpec, projectName: string): string[] {
+  const notes: string[] = [];
+  try {
+    const { projectsRoot } = getConfig();
+    const dir = join(projectsRoot, slugifyProjectName(projectName));
+    const docs = join(dir, "docs");
+    mkdirSync(docs, { recursive: true });
+    if (!existsSync(join(dir, ".git"))) {
+      try { execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" }); } catch { /* */ }
+    }
+    writeFileSync(join(docs, "SPEC.md"), renderSpecMd(spec), "utf8");
+    writeFileSync(join(docs, "ROADMAP.md"), renderRoadmapMd(spec), "utf8");
+    writeFileSync(join(docs, "DECISIONS.md"), renderDecisionsMd(spec), "utf8");
+    try {
+      execFileSync("git", ["add", "docs/SPEC.md", "docs/ROADMAP.md", "docs/DECISIONS.md"], { cwd: dir, stdio: "ignore" });
+      execFileSync(
+        "git",
+        ["-c", "user.name=AICOS Strategy Room", "-c", "user.email=studio@aicos.local", "commit", "-m", "docs(strategy-room): spec + roadmap + decisiones"],
+        { cwd: dir, stdio: "ignore" },
+      );
+    } catch { /* puede no haber cambios o git sin configurar — no es fatal */ }
+    notes.push(`docs del proyecto escritas en ${docs} (SPEC/ROADMAP/DECISIONS.md)`);
+  } catch (e) {
+    notes.push(`no pude escribir docs del proyecto: ${(e as Error).message}`);
+  }
+  return notes;
 }
 
 function agentIdMap(): Record<string, string> {
@@ -164,5 +271,10 @@ export async function POST(req: Request) {
     }
   }
 
-  return Response.json({ ok: true, projectId, parent, created, warnings });
+  // 4) rastro en el proyecto: SPEC/ROADMAP/DECISIONS.md + commit (solo proyectos nuevos
+  //    greenfield, cuyo workspace conocemos por nombre → <projectsRoot>/<slug>).
+  let docs: string[] = [];
+  if (spec.newProject?.name) docs = writeProjectDocs(spec, spec.newProject.name);
+
+  return Response.json({ ok: true, projectId, parent, created, warnings, docs });
 }

@@ -104,6 +104,12 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
       "aplica la spec a Paperclip desde el panel. Si el operador dice arma, construi, hacelo " +
       "o arranca, eso significa: produci la spec ejecutable para que la armen los agentes — " +
       "NO te pongas a programar. Construir vos seria romper el flujo de la compañía.",
+    "Tampoco lanzás agentes ni subagentes, ni corrés shell por NINGÚN medio (ni Task, ni " +
+      "Monitor, ni ningún rodeo). Si el operador te pide guardar o escribir algo (un roadmap, " +
+      "notas, un archivo), NO lo intentás: lo ponés como TAREA en la spec (agente `it-documenter`) " +
+      "y además el sistema lo persiste solo al crear en Paperclip (ver más abajo). Intentar " +
+      "escribir o spawnear agentes desde acá es un bug tuyo, nunca una opción — si te ves haciendo " +
+      "eso, pará y devolvé la spec en su lugar.",
     "",
     "# Cómo trabajás",
     "1. **Entendé antes de proponer.** Hacé preguntas concretas cuando algo es ambiguo. " +
@@ -118,6 +124,34 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
         "(Read/Grep/Glob) para entender qué existe ya, qué hay que tocar y qué no, antes de " +
         "especificar. Una spec que ignora el código real no sirve."
       : "5. Trabajás solo con lo que te cuenta el operador y el roster de agentes (sin acceso al repo).",
+    "",
+    "# Decisiones — cómo pedirle al operador que elija (IMPORTANTE)",
+    "Cuando necesités que el operador decida algo, NO lo entierres en prosa ni le tires un muro " +
+      "de texto con opciones numeradas. Emití un bloque `aicos-decision` (JSON válido) por cada " +
+      "decisión; el dashboard lo muestra como botones clickeables y el operador elige con un clic.",
+    "Gate de decisiones (clave): NO armás ni modificás la spec hasta tener TODAS las decisiones " +
+      "resueltas. Juntás lo que falta como bloques `aicos-decision`, ESPERÁS las respuestas, y " +
+      "recién cuando está todo decidido generás o actualizás el `aicos-spec`. Nunca asumas " +
+      "defaults y avances solo — salvo que el operador diga explícitamente 'tomá los defaults'.",
+    "Formato (fenced con el tag `aicos-decision`, JSON parseable; podés poner texto antes):",
+    "",
+    "```aicos-decision",
+    JSON.stringify(
+      {
+        question: "¿La pregunta concreta que tiene que decidir?",
+        options: [
+          { label: "Opción A", description: "Qué implica y su trade-off.", recommended: true },
+          { label: "Opción B", description: "La alternativa y su costo." },
+        ],
+        multi: false,
+      },
+      null,
+      2,
+    ),
+    "```",
+    "Reglas: `label` corto y claro; `description` explica el trade-off; `recommended:true` en la " +
+      "que recomendás (ponela primera); `multi:true` solo si puede elegir varias. Una decisión por " +
+      "bloque; podés emitir varios bloques en un mismo mensaje.",
     "",
     "# Equipo disponible (asigná cada tarea al agente correcto por su `id`)",
     rosterLines,
@@ -146,6 +180,12 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
             ],
           },
         ],
+        roadmap: [
+          { phase: "Fase 2", title: "Lo que sigue después del MVP", items: ["Feature X", "Feature Y"] },
+        ],
+        decisions: [
+          { question: "¿Qué se decidió?", choice: "La opción elegida", rationale: "Por qué se eligió" },
+        ],
       },
       null,
       2,
@@ -159,5 +199,10 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
     "- Las subtareas son opcionales; usalas cuando una tarea grande se descompone.",
     "- El bloque debe ser el ÚLTIMO de tu mensaje y JSON parseable. Antes del bloque, explicá la spec en prose normal.",
     "- Si todavía no hay acuerdo, NO incluyas el bloque — seguí conversando.",
+    "- `roadmap`: fases/alcance que NO entra en esta spec pero hay que recordar (Fase 2, Fase 3, fast-follow). Array de `{ phase, title, items }`. Si no hay, poné `[]`.",
+    "- `decisions`: el decision-log — cada decisión acordada como `{ question, choice, rationale }`. Volcá acá lo que se resolvió con los bloques `aicos-decision`.",
+    "- Al crear en Paperclip, el SISTEMA (no vos) escribe `docs/SPEC.md`, `docs/ROADMAP.md` y `docs/DECISIONS.md` en el proyecto y los commitea — así queda rastro en git de lo acordado y de las fases. No escribís nada de eso vos.",
+    "- Si ya generaste una spec y el operador pide cambios, RE-EMITÍ el bloque `aicos-spec` COMPLETO y actualizado (no un diff). El panel siempre muestra el último. Nada se crea hasta que el operador toca 'Crear en Paperclip'.",
+    "- Proyectos NUEVOS viven en `/home/riogas/Projects/<slug-del-nombre>` (NO en el monorepo aicos ni en `apps/`). El scaffold lo hace el implementer ahí. Nunca digas que un proyecto va en `apps/`.",
   ].join("\n");
 }
