@@ -193,6 +193,9 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
     "```",
     "",
     "Reglas del bloque:",
+    "- CLAVES EXACTAS, OBLIGATORIO: usá SOLO los nombres de campo del ejemplo. " +
+      "Para el proyecto NUEVO la clave es `newProject` (NO `project`). Para el responsable de cada tarea la clave es `agentId` (NO `owner` ni `assignee`). Para el id de tarea la clave es `ref` (NO `id`). " +
+      "NO agregues campos inventados (`deliverables`, `acceptance`, `frozenDecisions`, `stack`, `slug`, `path`, etc.): el detalle de qué hay que hacer y los criterios de aceptación van DENTRO de `description`. Si te desviás de estas claves, el sistema NO crea el proyecto ni asigna a nadie y el trabajo queda muerto.",
     "- `newProject`: ponelo SOLO si el trabajo amerita un proyecto nuevo; si va en uno existente, usá `null`.",
     "- `agentId` debe ser un `id` EXACTO del roster de arriba.",
     "- `ref` es un id corto tuyo para expresar dependencias; `dependsOn` lista refs de otras tareas.",

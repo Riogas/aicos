@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { getConfig } from "@/lib/repos";
 import { buildGoalTitle, buildGoalBrief } from "@/lib/goal";
+import { normalizeSpec } from "@/lib/spec-normalize";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -205,7 +206,10 @@ export async function POST(req: Request) {
   let spec: AicosSpec;
   try {
     const body = await req.json();
-    spec = body.spec || body;
+    // El CEO a veces driftea del schema canónico (project/owner/id en vez de
+    // newProject/agentId/ref). Normalizamos para que SIEMPRE cree proyecto y
+    // asigne agente, sin importar qué nombres de campo haya inventado.
+    spec = normalizeSpec(body.spec || body) as AicosSpec;
   } catch {
     return Response.json({ error: "invalid body" }, { status: 400 });
   }

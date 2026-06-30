@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { normalizeSpec } from "@/lib/spec-normalize";
 
 // ── tipos ────────────────────────────────────────────────────────────────────
 type Who = "hermes" | "ceo";
@@ -64,7 +65,9 @@ function extractSpec(text: string): { spec?: AicosSpec; clean: string } {
   const m = text.match(/```aicos-spec\s*([\s\S]*?)```/);
   if (!m) return { clean: text };
   try {
-    const spec = JSON.parse(m[1].trim()) as AicosSpec;
+    // normalizamos el schema "suelto" del CEO (project/owner/id) al canónico
+    // así el panel ya muestra proyecto + agente como van a quedar en Paperclip
+    const spec = normalizeSpec(JSON.parse(m[1].trim())) as AicosSpec;
     return { spec, clean: text.replace(m[0], "").trim() };
   } catch {
     return { clean: text };
