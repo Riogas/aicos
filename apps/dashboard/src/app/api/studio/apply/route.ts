@@ -13,6 +13,7 @@ import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { getConfig } from "@/lib/repos";
+import { buildGoalTitle, buildGoalBrief } from "@/lib/goal";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -227,10 +228,12 @@ export async function POST(req: Request) {
     else warnings.push(`no pude crear el proyecto (HTTP ${code}: ${JSON.stringify(data).slice(0, 160)}) — sigo sin proyecto`);
   }
 
-  // 2) goal padre (asignado al CEO)
+  // 2) goal padre (asignado al CEO). Auto-explicativo: título con sentido +
+  //    brief markdown (objetivo/alcance/plan/roadmap/decisiones) para que el CEO
+  //    lo tome con contexto, no como un placeholder vacío.
   const parentBody: Record<string, unknown> = {
-    title: spec.title || "Goal (Strategy Room)",
-    description: spec.summary || "",
+    title: buildGoalTitle(spec),
+    description: buildGoalBrief(spec),
     priority: "high",
     status: "backlog",
   };
