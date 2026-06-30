@@ -90,13 +90,14 @@ function extractDecisions(text: string): { decisions?: Decision[]; clean: string
 }
 
 // ── tarjeta de decisión: opciones clickeables (estilo consola) ────────────────
-function DecisionBlock({ d, disabled, onPick }: { d: Decision; disabled?: boolean; onPick: (labels: string[]) => void }) {
-  const [sel, setSel] = useState<string[]>([]);
+// Controlada por el padre: tocar una opción SOLO marca la selección (no envía).
+// El envío real va por el botón "Enviar" del compositor, junto con el texto libre.
+function DecisionBlock({ d, sel, disabled, onChange }: { d: Decision; sel: string[]; disabled?: boolean; onChange: (labels: string[]) => void }) {
   const multi = !!d.multi;
   const click = (label: string) => {
     if (disabled) return;
-    if (multi) setSel((s) => (s.includes(label) ? s.filter((x) => x !== label) : [...s, label]));
-    else onPick([label]);
+    if (multi) onChange(sel.includes(label) ? sel.filter((x) => x !== label) : [...sel, label]);
+    else onChange(sel.includes(label) ? [] : [label]); // single: togglea / reemplaza
   };
   return (
     <div className="sr-decision">
@@ -106,22 +107,17 @@ function DecisionBlock({ d, disabled, onPick }: { d: Decision; disabled?: boolea
           <button
             key={i}
             type="button"
-            className={`sr-decision-opt${o.recommended ? " rec" : ""}${multi && sel.includes(o.label) ? " on" : ""}`}
+            className={`sr-decision-opt${o.recommended ? " rec" : ""}${sel.includes(o.label) ? " on" : ""}`}
             disabled={disabled}
             onClick={() => click(o.label)}
           >
             <span className="sr-decision-lbl">
-              {multi ? (sel.includes(o.label) ? "☑ " : "☐ ") : ""}{o.label}{o.recommended ? " ★" : ""}
+              {multi ? (sel.includes(o.label) ? "☑ " : "☐ ") : (sel.includes(o.label) ? "◉ " : "○ ")}{o.label}{o.recommended ? " ★" : ""}
             </span>
             {o.description && <span className="sr-decision-desc">{o.description}</span>}
           </button>
         ))}
       </div>
-      {multi && (
-        <button type="button" className="sr-decision-send" disabled={disabled || !sel.length} onClick={() => onPick(sel)}>
-          Enviar selección{sel.length ? ` (${sel.length})` : ""}
-        </button>
-      )}
     </div>
   );
 }
@@ -186,6 +182,8 @@ export function StudioClient() {
   const [applyRes, setApplyRes] = useState<ApplyResult | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  // selecciones de decisiones en curso, key = `${msgId}:${decisionIdx}` → labels elegidos
+  const [picks, setPicks] = useState<Record<string, string[]>>({});
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [showPlaybooks, setShowPlaybooks] = useState(false);
   const [showCfg, setShowCfg] = useState(false);
@@ -304,17 +302,39 @@ export function StudioClient() {
     loadConvs();
   };
 
-  const send = useCallback(async (override?: string) => {
-    const isOverride = typeof override === "string";
-    const text = (isOverride ? override : input).trim();
-    const atts = isOverride ? [] : attachments;
-    if ((!text && atts.length === 0) || busy || uploading) return;
+  const send = useCallback(async () => {
+    if (busy || uploading) return;
+    // localizar la última tarjeta de decisión sin resolver y juntar sus selecciones
+    const msgs = r.current.messages;
+    let decMsgId: number | null = null;
+    let decPreamble = "";
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const mm = msgs[i];
+      if (mm.role === "agent" && mm.decisions && mm.decisions.length && !mm.decided) {
+        const lines: string[] = [];
+        mm.decisions.forEach((d, di) => {
+          const chosen = picks[`${mm.id}:${di}`] || [];
+          if (chosen.length) lines.push(`- ${d.question} → ${chosen.join(", ")}`);
+        });
+        if (lines.length) { decMsgId = mm.id; decPreamble = "Decisiones tomadas:\n" + lines.join("\n"); }
+        break;
+      }
+    }
+    const typed = input.trim();
+    const atts = attachments;
+    // hace falta: texto, adjuntos, o al menos una decisión tocada
+    if (!typed && atts.length === 0 && !decPreamble) return;
+    const text = decPreamble ? (typed ? `${decPreamble}\n\n${typed}` : decPreamble) : typed;
     setApplyRes(null);
-    if (!isOverride) { setInput(""); setAttachments([]); }
-    const base = r.current.messages;
+    setInput(""); setAttachments([]);
+    if (decMsgId != null) {
+      const did = decMsgId;
+      setPicks((p) => { const n: Record<string, string[]> = {}; for (const k of Object.keys(p)) if (!k.startsWith(`${did}:`)) n[k] = p[k]; return n; });
+    }
+    const base = r.current.messages.map((x) => (x.id === decMsgId ? { ...x, decided: true } : x));
     const userMsg: Msg = { id: ++idRef.current, role: "user", text, attachments: atts.length ? atts : undefined };
     const agentMsg: Msg = { id: ++idRef.current, role: "agent", text: "", streaming: true };
-    setMessages((m) => [...m, userMsg, agentMsg]);
+    setMessages((m) => [...m.map((x) => (x.id === decMsgId ? { ...x, decided: true } : x)), userMsg, agentMsg]);
     setBusy(true);
     let localSession = r.current.sessionId;
 
@@ -360,7 +380,7 @@ export function StudioClient() {
     } finally {
       setBusy(false);
     }
-  }, [input, busy, uploading, attachments, persist]);
+  }, [input, busy, uploading, attachments, picks, persist]);
 
   const applySpec = async (spec: AicosSpec) => {
     setApplying(true); setApplyRes(null);
@@ -374,12 +394,16 @@ export function StudioClient() {
     }
   };
 
-  // click en una opción de decisión → la manda como respuesta y marca la tarjeta como resuelta
-  const pickOption = useCallback((msgId: number, labels: string[]) => {
-    if (busy || !labels.length) return;
-    setMessages((m) => m.map((x) => (x.id === msgId ? { ...x, decided: true } : x)));
-    void send(labels.join(", "));
-  }, [busy, send]);
+  // ¿la última decisión sin resolver tiene al menos una opción elegida? (habilita Enviar)
+  const pendingPicks = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const mm = messages[i];
+      if (mm.role === "agent" && mm.decisions?.length && !mm.decided) {
+        return mm.decisions.some((_, di) => (picks[`${mm.id}:${di}`]?.length || 0) > 0);
+      }
+    }
+    return false;
+  }, [messages, picks]);
 
   // agrupar conversaciones por día
   const grouped = useMemo(() => {
@@ -503,8 +527,17 @@ export function StudioClient() {
                   {m.decisions && m.decisions.length > 0 && (
                     <div className="sr-decisions">
                       {m.decisions.map((d, i) => (
-                        <DecisionBlock key={i} d={d} disabled={m.decided || busy} onPick={(labels) => pickOption(m.id, labels)} />
+                        <DecisionBlock
+                          key={i}
+                          d={d}
+                          sel={picks[`${m.id}:${i}`] || []}
+                          disabled={m.decided || busy}
+                          onChange={(labels) => setPicks((p) => ({ ...p, [`${m.id}:${i}`]: labels }))}
+                        />
                       ))}
+                      {!m.decided && !busy && (
+                        <div className="sr-decision-hint">Tocá las opciones que quieras y escribí abajo si querés agregar algo · todo entra al CEO al darle <b>Enviar</b></div>
+                      )}
                     </div>
                   )}
                   {m.spec && <div className="sr-spec-chip">✦ Spec generada — ver panel →</div>}
@@ -541,7 +574,7 @@ export function StudioClient() {
                 rows={2}
                 disabled={busy}
               />
-              <button className="sr-send" onClick={() => send()} disabled={busy || uploading || (!input.trim() && attachments.length === 0)}>{busy ? "…" : "Enviar"}</button>
+              <button className="sr-send" onClick={() => send()} disabled={busy || uploading || (!input.trim() && attachments.length === 0 && !pendingPicks)}>{busy ? "…" : "Enviar"}</button>
             </div>
           </div>
         </div>
