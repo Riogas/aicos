@@ -406,6 +406,15 @@ function parseOpencodeNdjson(
  * stdout/stderr. Cada CLI ejecuta por su cuenta sus tools internos (edit files,
  * bash, etc.) — confiamos en su comportamiento agentic nativo.
  */
+// Timeout del CLI. Debe quedar POR DEBAJO del timeoutSec del adapter de
+// Paperclip (2400s en el registry) pero holgado: 10 min mataba con SIGTERM
+// (exit 143) tareas de arquitectura legítimas de >10 min con el trabajo a
+// medio hacer. Configurable con BRIDGE_CLI_TIMEOUT_MS.
+const CLI_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.BRIDGE_CLI_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2_100_000; // 35 min default
+})();
+
 export function invokeCli(opts: CliInvocationOptions): Promise<CliInvocationResult> {
   const args = buildArgs(opts);
   const command = `${opts.cli} ${args.slice(0, args.length - 1).join(" ")} "<prompt:${opts.prompt.length}chars>"`;
@@ -415,7 +424,7 @@ export function invokeCli(opts: CliInvocationOptions): Promise<CliInvocationResu
     const proc = spawn(opts.cli, args, {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: opts.cwd,
-      timeout: opts.timeoutMs ?? 600_000, // 10 min default
+      timeout: opts.timeoutMs ?? CLI_TIMEOUT_MS,
       // El bridge corre como root dentro del container de Paperclip y spawnea
       // claude con --dangerously-skip-permissions; claude lo rechaza como root
       // salvo que IS_SANDBOX declare un entorno sandboxeado. Paperclip no
