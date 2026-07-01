@@ -624,7 +624,10 @@ export async function executeRun(input: ExecuteRunInput): Promise<ExecuteRunResu
         costUsd,
         agentRegistryId: input.persona?.registryId,
         ticketId: input.ticketIdentifier ?? pc?.issueId,
-        failureReason: exitCode !== 0 ? `exit ${exitCode}` : undefined,
+        // Si falló el gate de tests (no el CLI), no culpar al provider: el
+        // scoring de learning castigaba a claude por fallas que eran del gate.
+        failureReason:
+          exitCode !== 0 ? (testReport ? `test-gate: exit ${exitCode}` : `exit ${exitCode}`) : undefined,
       })
       .catch((e) =>
         process.stderr.write(`[learning] recordOutcome warn: ${(e as Error).message}\n`),

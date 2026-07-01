@@ -116,6 +116,17 @@ function runCommand(cwd: string, command: string, timeoutSec: number): Promise<T
   });
 }
 
+// Salidas típicas de los runners cuando el proyecto NO tiene tests todavía.
+// "No hay tests aún" ≠ "tests rotos": vitest/jest/mocha salen con exit 1 y
+// pytest con exit 5 al no encontrar archivos, lo que bloqueaba para siempre
+// los tickets de scaffolding greenfield (el gate era imposible de pasar).
+const NO_TESTS_PATTERNS: RegExp[] = [
+  /no test files? found/i, // vitest, mocha
+  /no tests? found/i, // jest
+  /no tests ran/i, // pytest
+  /couldn't find any test files/i,
+];
+
 /** Corre el gate de tests en el workspace. Si no aplica, devuelve ran=false. */
 export async function runTestGate(cwd: string, projectName?: string): Promise<TestGateResult> {
   const cfg = loadTestGateConfig();
@@ -123,5 +134,14 @@ export async function runTestGate(cwd: string, projectName?: string): Promise<Te
   const command = detectTestCommand(cwd, projectName, cfg);
   if (!command) return { ran: false, passed: true, exitCode: 0, output: "" };
   process.stderr.write(`[test-gate] running "${command}" in ${cwd}\n`);
-  return await runCommand(cwd, command, cfg.timeoutSec);
+  const result = await runCommand(cwd, command, cfg.timeoutSec);
+  if (!result.passed && !result.timedOut && NO_TESTS_PATTERNS.some((re) => re.test(result.output))) {
+    process.stderr.write(`[test-gate] no test files in workspace — treating as pass\n`);
+    return {
+      ...result,
+      passed: true,
+      output: `(sin archivos de test aún — gate salteado)\n${result.output}`,
+    };
+  }
+  return result;
 }
