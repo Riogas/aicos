@@ -48,6 +48,7 @@ interface AicosSpec {
   title?: string;
   summary?: string;
   newProject?: { name: string; description?: string } | null;
+  existingProject?: { id?: string; name?: string } | null;
   toolsNeeded?: string[];
   connectionsNeeded?: string[];
   tasks?: SpecTask[];
@@ -223,7 +224,28 @@ export async function POST(req: Request) {
 
   // 1) proyecto
   let projectId: string | undefined = DEFAULT_PROJECT || undefined;
-  if (spec.newProject?.name) {
+  // Nombre real del proyecto (para escribir los docs en su carpeta) — lo llena
+  // tanto el path de proyecto nuevo como el de proyecto existente.
+  let docsProjectName: string | undefined = spec.newProject?.name;
+  if (spec.existingProject && (spec.existingProject.id || spec.existingProject.name)) {
+    // Trabajo sobre un proyecto YA existente: resolver por id, nombre exacto o slug.
+    const wanted = spec.existingProject;
+    const { code, data } = await pc("GET", `/api/companies/${COMPANY}/projects`);
+    const list: Array<{ id: string; name: string }> = code === 200 ? (Array.isArray(data) ? data : data?.items ?? []) : [];
+    const bySlug = (n: string) => slugifyProjectName(n);
+    const found =
+      (wanted.id && list.find((p) => p.id === wanted.id)) ||
+      (wanted.name && list.find((p) => p.name.toLowerCase() === wanted.name!.toLowerCase())) ||
+      (wanted.name && list.find((p) => bySlug(p.name) === bySlug(wanted.name!)));
+    if (found) {
+      projectId = found.id;
+      docsProjectName = found.name;
+    } else {
+      warnings.push(
+        `existingProject no encontrado (id=${wanted.id ?? "-"} name=${wanted.name ?? "-"}) — las tareas van sin proyecto/al default`,
+      );
+    }
+  } else if (spec.newProject?.name) {
     const { code, data } = await pc("POST", `/api/companies/${COMPANY}/projects`, {
       name: spec.newProject.name,
       description: spec.newProject.description || spec.summary || "",
@@ -278,10 +300,10 @@ export async function POST(req: Request) {
     }
   }
 
-  // 4) rastro en el proyecto: SPEC/ROADMAP/DECISIONS.md + commit (solo proyectos nuevos
-  //    greenfield, cuyo workspace conocemos por nombre → <projectsRoot>/<slug>).
+  // 4) rastro en el proyecto: SPEC/ROADMAP/DECISIONS.md + commit. Aplica a
+  //    proyectos nuevos Y existentes — el workspace se deduce por slug del nombre.
   let docs: string[] = [];
-  if (spec.newProject?.name) docs = writeProjectDocs(spec, spec.newProject.name);
+  if (docsProjectName) docs = writeProjectDocs(spec, docsProjectName);
 
   return Response.json({ ok: true, projectId, parent, created, warnings, docs });
 }

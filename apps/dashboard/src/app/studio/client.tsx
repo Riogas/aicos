@@ -31,6 +31,7 @@ interface Msg {
   role: "user" | "agent";
   text: string;
   spec?: AicosSpec;
+  specError?: boolean;
   decisions?: Decision[];
   decided?: boolean;
   streaming?: boolean;
@@ -61,7 +62,7 @@ function attIcon(type?: string): string {
 }
 
 // ── extrae el bloque ```aicos-spec``` del texto del agente ────────────────────
-function extractSpec(text: string): { spec?: AicosSpec; clean: string } {
+function extractSpec(text: string): { spec?: AicosSpec; clean: string; specError?: boolean } {
   const m = text.match(/```aicos-spec\s*([\s\S]*?)```/);
   if (!m) return { clean: text };
   try {
@@ -70,7 +71,9 @@ function extractSpec(text: string): { spec?: AicosSpec; clean: string } {
     const spec = normalizeSpec(JSON.parse(m[1].trim())) as AicosSpec;
     return { spec, clean: text.replace(m[0], "").trim() };
   } catch {
-    return { clean: text };
+    // El CEO emitió el bloque pero el contenido NO es JSON (típico: YAML/markdown).
+    // Antes esto se tragaba en silencio → panel vacío sin explicación (2026-07-02).
+    return { clean: text, specError: true };
   }
 }
 
@@ -372,9 +375,9 @@ export function StudioClient() {
           }
         }
       }
-      const { spec, clean } = extractSpec(acc);
+      const { spec, clean, specError } = extractSpec(acc);
       const { decisions, clean: clean2 } = extractDecisions(clean);
-      const finalAgent: Msg = { ...agentMsg, text: clean2 || clean || acc, spec, decisions, streaming: false };
+      const finalAgent: Msg = { ...agentMsg, text: clean2 || clean || acc, spec, specError, decisions, streaming: false };
       const finalMsgs = [...base, userMsg, finalAgent];
       setMessages(finalMsgs);
       persist(finalMsgs, localSession);
@@ -544,6 +547,12 @@ export function StudioClient() {
                     </div>
                   )}
                   {m.spec && <div className="sr-spec-chip">✦ Spec generada — ver panel →</div>}
+                  {m.specError && (
+                    <div className="sr-spec-chip" style={{ borderColor: "rgba(239,68,68,0.5)", color: "#ef4444" }}>
+                      ⚠️ El bloque aicos-spec vino en formato inválido (no es JSON) — el panel no puede mostrarlo.
+                      Respondele: «re-emití el bloque aicos-spec completo en JSON válido».
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

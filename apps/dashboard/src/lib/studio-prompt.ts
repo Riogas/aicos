@@ -152,6 +152,9 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
     "Reglas: `label` corto y claro; `description` explica el trade-off; `recommended:true` en la " +
       "que recomendás (ponela primera); `multi:true` solo si puede elegir varias. Una decisión por " +
       "bloque; podés emitir varios bloques en un mismo mensaje.",
+    "Esto aplica a TODA pregunta que implique una elección del operador — también las de proceso " +
+      "('¿qué alcance?', '¿cómo seguimos?', '¿lo hago ya o después?'). NUNCA cierres un mensaje con " +
+      "preguntas numeradas en prosa esperando texto libre: si hay que elegir, es un bloque `aicos-decision`.",
     "",
     "# Equipo disponible (asigná cada tarea al agente correcto por su `id`)",
     rosterLines,
@@ -193,10 +196,20 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
     "```",
     "",
     "Reglas del bloque:",
+    "- JSON ESTRICTO, OBLIGATORIO: el contenido del bloque tiene que pasar `JSON.parse` tal cual. " +
+      "NADA de YAML, ni claves sin comillas, ni comentarios, ni texto suelto, ni markdown adentro del bloque. " +
+      "Si no parsea como JSON, el panel NO muestra nada, no aparece el botón 'Crear en Paperclip' y el trabajo queda muerto sin aviso. Este es el error más común — no lo cometas.",
     "- CLAVES EXACTAS, OBLIGATORIO: usá SOLO los nombres de campo del ejemplo. " +
       "Para el proyecto NUEVO la clave es `newProject` (NO `project`). Para el responsable de cada tarea la clave es `agentId` (NO `owner` ni `assignee`). Para el id de tarea la clave es `ref` (NO `id`). " +
       "NO agregues campos inventados (`deliverables`, `acceptance`, `frozenDecisions`, `stack`, `slug`, `path`, etc.): el detalle de qué hay que hacer y los criterios de aceptación van DENTRO de `description`. Si te desviás de estas claves, el sistema NO crea el proyecto ni asigna a nadie y el trabajo queda muerto.",
     "- `newProject`: ponelo SOLO si el trabajo amerita un proyecto nuevo; si va en uno existente, usá `null`.",
+    "- Proyecto EXISTENTE: si el trabajo es sobre un proyecto que ya está en Paperclip (típico cuando " +
+      "la conversación tiene un repo seleccionado), poné `newProject: null` y agregá " +
+      '`"existingProject": { "name": "<nombre del proyecto en Paperclip>" }` — las tareas se cuelgan de ese proyecto ' +
+      "y los agentes trabajan en su misma carpeta. Si no sabés el nombre exacto, usá el nombre del repo/carpeta (el sistema matchea por slug).",
+    "- Si el operador pide 'la spec', 'pasásela a Paperclip', 'armámelo para Paperclip' o similar, tu respuesta " +
+      "ES el bloque `aicos-spec` (completo, re-emitido). NUNCA lo entregues como documento markdown 'para copiar', " +
+      "NUNCA ofrezcas escribirlo en `docs/` ni guardarlo vos (no podés y además el sistema escribe los docs solo al aplicar).",
     "- `agentId` debe ser un `id` EXACTO del roster de arriba.",
     "- `ref` es un id corto tuyo para expresar dependencias; `dependsOn` lista refs de otras tareas.",
     "- Las subtareas son opcionales; usalas cuando una tarea grande se descompone.",

@@ -34,6 +34,8 @@ export interface NSpec {
   title?: string;
   summary?: string;
   newProject?: { name: string; description?: string } | null;
+  /** Trabajo sobre un proyecto YA existente en Paperclip (por id o nombre/slug). */
+  existingProject?: { id?: string; name?: string } | null;
   toolsNeeded?: string[];
   connectionsNeeded?: string[];
   tasks?: NSpecTask[];
@@ -131,16 +133,33 @@ function normalizeProject(raw: any): { name: string; description?: string } | nu
   return undefined;
 }
 
+/** existingProject / existingProjectId / projectId (sueltos) → canónico. */
+function normalizeExistingProject(raw: any): { id?: string; name?: string } | undefined {
+  const e = raw.existingProject ?? raw.existing_project;
+  if (typeof e === "string" && e.trim()) return { name: e.trim() };
+  if (e && typeof e === "object") {
+    const id = str(e.id) || str(e.projectId);
+    const name = str(e.name) || str(e.nombre) || str(e.slug);
+    if (id || name) return { id, name };
+  }
+  const id = str(raw.existingProjectId) || str(raw.projectId);
+  if (id) return { id };
+  return undefined;
+}
+
 export function normalizeSpec(raw: any): NSpec {
   if (!raw || typeof raw !== "object") return raw as NSpec;
   const proj = normalizeProject(raw);
+  const existing = normalizeExistingProject(raw);
   const tasks = Array.isArray(raw.tasks || raw.tareas)
     ? (raw.tasks || raw.tareas).map(normalizeTask).filter(Boolean)
     : [];
   return {
     title: str(raw.title) || str(raw.titulo) || (proj ? proj.name : undefined) || str(raw.name),
     summary: str(raw.summary) || str(raw.resumen) || str(raw.objetivo) || (raw.project ? str(raw.project.rationale) : undefined),
-    newProject: proj,
+    // Si apunta a un proyecto existente, NO crear uno nuevo aunque `project` venga suelto.
+    newProject: existing ? null : proj,
+    existingProject: existing,
     toolsNeeded: arrStr(raw.toolsNeeded) || arrStr(raw.tools),
     connectionsNeeded: arrStr(raw.connectionsNeeded) || arrStr(raw.connections),
     tasks: tasks as NSpecTask[],
