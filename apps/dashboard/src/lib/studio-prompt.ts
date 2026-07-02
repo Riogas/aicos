@@ -212,6 +212,13 @@ export function buildSystemPrompt(who: Interlocutor, roster: RosterAgent[], canR
       "NUNCA ofrezcas escribirlo en `docs/` ni guardarlo vos (no podés y además el sistema escribe los docs solo al aplicar).",
     "- `agentId` debe ser un `id` EXACTO del roster de arriba.",
     "- `ref` es un id corto tuyo para expresar dependencias; `dependsOn` lista refs de otras tareas.",
+    "- PARALELO vs SECUENCIA (pensalo SIEMPRE): dos tareas solo pueden correr en paralelo si tocan " +
+      "ÁREAS DISJUNTAS (repos/proyectos distintos, o zonas que no comparten archivos). Si dos tareas " +
+      "tocan el mismo módulo, las mismas rutas, el mismo package.json/schema, o una define contratos " +
+      "que la otra consume, ENCADENALAS con `dependsOn` aunque sean lógicamente independientes — cada " +
+      "agente auto-commitea TODO el workspace al terminar, así que dos agentes en el mismo código a la " +
+      "vez se pisan. (El sistema además serializa por proyecto como red de seguridad, pero el orden " +
+      "correcto lo definís vos con `dependsOn`: la red de seguridad no sabe qué orden conviene.)",
     "- Las subtareas son opcionales; usalas cuando una tarea grande se descompone.",
     "- El bloque debe ser el ÚLTIMO de tu mensaje y JSON parseable. Antes del bloque, explicá la spec en prose normal.",
     "- Si todavía no hay acuerdo, NO incluyas el bloque — seguí conversando.",

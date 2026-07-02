@@ -235,23 +235,47 @@ function candidateIssues(items: PaperclipIssueListItem[]): PaperclipIssueListIte
 const CLAIM_URL =
   process.env.BRIDGE_CLAIM_URL ?? "http://host.docker.internal:7100/internal/claim";
 
-/** Reclama un issue en el bridge host. Fail-open: si el bridge no responde, se concede. */
-async function claimIssue(issueId: string, runId: string): Promise<{ granted: boolean; holder?: string }> {
+interface ClaimResult {
+  granted: boolean;
+  reason?: "issue" | "workspace";
+  holder?: string;
+}
+
+/** Reclama un issue (+lock de su workspace) en el bridge host. Fail-open. */
+async function claimIssue(issueId: string, runId: string, projectId?: string | null): Promise<ClaimResult> {
   try {
     const cr = await fetch(CLAIM_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ issueId, runId }),
+      body: JSON.stringify({ issueId, runId, projectId: projectId ?? undefined }),
       signal: AbortSignal.timeout(4000),
     });
     if (cr.ok) {
-      const j = (await cr.json()) as { granted?: boolean; holder?: string };
-      return { granted: j.granted !== false, holder: j.holder };
+      const j = (await cr.json()) as ClaimResult;
+      return { granted: j.granted !== false, reason: j.reason, holder: j.holder };
     }
   } catch {
     /* fail-open */
   }
   return { granted: true };
+}
+
+/**
+ * Espera a que se libere el workspace: re-intenta el claim cada 15s hasta
+ * WORKSPACE_WAIT_MS. Cubre el caso común (el run anterior está terminando);
+ * si el workspace sigue ocupado, el caller devuelve el ticket a `todo` y
+ * Paperclip lo re-despacha más tarde.
+ */
+const WORKSPACE_WAIT_MS = Number(process.env.BRIDGE_WORKSPACE_WAIT_MS) || 120_000;
+
+async function claimWithWait(issueId: string, runId: string, projectId?: string | null): Promise<ClaimResult> {
+  const deadline = Date.now() + WORKSPACE_WAIT_MS;
+  let last = await claimIssue(issueId, runId, projectId);
+  while (!last.granted && last.reason === "workspace" && Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, 15_000));
+    last = await claimIssue(issueId, runId, projectId);
+  }
+  return last;
 }
 
 export async function runPaperclipProcessMode(): Promise<number> {
@@ -340,34 +364,72 @@ export async function runPaperclipProcessMode(): Promise<number> {
   }
 
   // ── Claim: elegir el PRIMER candidato libre ───────────────────────────────
-  // Anti doble-dispatch + reparto: si Paperclip spawnea N adapters para este
-  // agente (N issues despachados juntos, o un dispatch duplicado), cada proceso
-  // reclama en orden y corre el primero que le concedan. Sin esto, todos
-  // "elegían" el mismo issue más reciente: uno corría y el resto salía skipped,
-  // dejando los otros tickets sin correr y al watchdog bloqueándolos (2026-07-02).
+  // Anti doble-dispatch + reparto + serialización por workspace:
+  //  - si Paperclip spawnea N adapters para este agente, cada proceso reclama
+  //    en orden y corre el primero que le concedan (reparto N↔N);
+  //  - si el candidato está en un PROYECTO cuyo workspace ya tiene un run
+  //    activo (de cualquier agente), se espera hasta WORKSPACE_WAIT_MS y si
+  //    sigue ocupado se devuelve el ticket a `todo` — dos agentes nunca
+  //    trabajan a la vez en el mismo repo (el auto-commit barrería el trabajo
+  //    a medio hacer del otro). El paralelismo real es entre proyectos.
   let issue: PaperclipIssueListItem | null = null;
   let effectiveRunId = runId ?? "";
+  const workspaceBusy: PaperclipIssueListItem[] = [];
   for (const cand of candidates) {
     const candRunId = runId ?? `process-${cand.id}-${Date.now()}`;
-    const claim = await claimIssue(cand.id, candRunId);
+    const claim = await claimIssue(cand.id, candRunId, cand.projectId);
     if (claim.granted) {
       issue = cand;
       effectiveRunId = candRunId;
       break;
     }
+    if (claim.reason === "workspace") workspaceBusy.push(cand);
     process.stderr.write(
-      `[process-mode] ${cand.identifier ?? cand.id} ya reclamado por ${claim.holder} — pruebo el siguiente\n`,
+      `[process-mode] ${cand.identifier ?? cand.id} no disponible (${claim.reason ?? "issue"}, holder=${claim.holder}) — pruebo el siguiente\n`,
     );
   }
-  if (!issue) {
+  // Nada libre pero hay candidatos esperando workspace: esperar por el primero.
+  if (!issue && workspaceBusy.length > 0) {
+    const cand = workspaceBusy[0]!;
+    const candRunId = runId ?? `process-${cand.id}-${Date.now()}`;
     process.stderr.write(
-      `[process-mode] todos los candidatos (${candidates.length}) ya están reclamados — duplicado, salgo\n`,
+      `[process-mode] workspace ocupado — espero hasta ${Math.round(WORKSPACE_WAIT_MS / 1000)}s por ${cand.identifier ?? cand.id}\n`,
+    );
+    const claim = await claimWithWait(cand.id, candRunId, cand.projectId);
+    if (claim.granted) {
+      issue = cand;
+      effectiveRunId = candRunId;
+    }
+  }
+  if (!issue) {
+    // Los tickets cuyo workspace sigue ocupado NO pueden quedar in_progress
+    // sin run (el watchdog los bloquearía): vuelven a `todo` y Paperclip los
+    // re-despacha cuando el workspace se libere.
+    for (const cand of workspaceBusy) {
+      try {
+        await fetch(`${apiUrl}/api/issues/${cand.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ status: "todo" }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        process.stderr.write(
+          `[process-mode] ${cand.identifier ?? cand.id} devuelto a todo (workspace ocupado)\n`,
+        );
+      } catch {
+        /* best-effort */
+      }
+    }
+    process.stderr.write(
+      `[process-mode] sin candidatos ejecutables (${candidates.length} reclamados/en espera) — salgo\n`,
     );
     process.stdout.write(
       JSON.stringify({
         ok: true,
         skipped: true,
-        reason: "all in_progress issues already claimed (duplicate dispatch)",
+        reason: workspaceBusy.length
+          ? "workspace busy — tickets requeued to todo"
+          : "all in_progress issues already claimed (duplicate dispatch)",
         persona: persona.registryId,
       }) + "\n",
     );

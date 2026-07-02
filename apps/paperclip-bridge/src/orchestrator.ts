@@ -133,7 +133,7 @@ ${roster}
 1. **If the task is atomic** (one agent can do it end-to-end, no real dependencies), emit a SINGLE subtask. Set atomic=true.
 2. **If the task is complex**, decompose into the MINIMUM number of subtasks needed. Avoid bureaucratic ceremony (don't always invent an analyst + architect + impl + reviewer if the work doesn't need it).
 3. **dependsOn must be a DAG** — no cycles. Each id in dependsOn must reference an earlier subtask in your list.
-4. **Parallelism is OK and encouraged** — if two subtasks can truly run independently, give them no shared dependsOn so they fan out.
+4. **Parallelism is OK — but ONLY across disjoint areas.** Two subtasks may fan out (no shared dependsOn) only if they touch different repos/projects or clearly non-overlapping zones of the code. If they modify the same module, the same routes/schema/package.json, or one defines contracts the other consumes, CHAIN them with dependsOn even if logically independent: each agent auto-commits the WHOLE workspace when it finishes, so two agents editing the same code concurrently clobber each other. (The runtime also serializes runs per project as a safety net, but the correct ORDER is your job.)
 5. **Match the role to the capabilities** — pick the specialist whose capabilities most directly fit the subtask. Don't default to "it-architect" for everything.
 6. **Max ${MAX_SUBTASKS} subtasks.** If the task seems to need more, you're over-decomposing — combine.
 7. **Each subtask description must be self-contained** — the assigned agent will read ONLY that description (not the parent task), so include the relevant context.

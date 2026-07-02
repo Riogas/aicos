@@ -786,7 +786,13 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   app.post("/internal/run-finished", async (req, reply) => {
     const r = RunFinishedSchema.safeParse(req.body);
     if (!r.success) { reply.code(400); return { error: "validation", details: r.error.issues }; }
-    activeClaims.delete(r.data.issueId); // libera el claim anti doble-dispatch
+    // Libera el claim del issue Y el lock de su workspace.
+    const claim = activeClaims.get(r.data.issueId);
+    activeClaims.delete(r.data.issueId);
+    if (claim?.projectId) {
+      const lock = workspaceLocks.get(claim.projectId);
+      if (lock && lock.issueId === r.data.issueId) workspaceLocks.delete(claim.projectId);
+    }
     await recordRunOutcome(r.data.issueId, r.data.identifier, r.data.disposition as Disposition).catch(() => {});
     return { ok: true };
   });
@@ -852,29 +858,53 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   });
   app.get<{ Params: { slug: string } }>("/apps/:slug/logs", async (req) => appLogs(req.params.slug));
 
-  // ─── Claim de despacho (guard anti doble-dispatch) ───────────────────────
-  // Paperclip a veces spawnea DOS adapters para el mismo issue con ms de
-  // diferencia (visto 2026-07-01 con RIO-8: dos runs de opus simultáneos en el
-  // mismo workspace). El process-mode reclama el issue acá antes de ejecutar;
-  // el segundo proceso recibe granted=false y sale limpio sin tocar el ticket.
+  // ─── Claim de despacho (anti doble-dispatch + lock de workspace) ─────────
+  // Dos garantías:
+  //  1. Un issue = un solo run activo (Paperclip a veces spawnea 2 adapters
+  //     para el mismo issue con ms de diferencia — visto con RIO-8).
+  //  2. Un PROYECTO/workspace = un solo run activo. Sin esto, tareas
+  //     "lógicamente independientes" del mismo repo corren en paralelo y el
+  //     auto-commit de cada agente barre el trabajo a medio hacer del otro.
+  //     El paralelismo real queda entre proyectos DISTINTOS.
   // El claim se libera en /internal/run-finished o por TTL (cubre crashes).
   const CLAIM_TTL_MS = 40 * 60 * 1000; // > timeout del CLI (35min)
-  const activeClaims = new Map<string, { runId: string; at: number }>();
-  const ClaimSchema = z.object({ issueId: z.string().min(1), runId: z.string().min(1) });
+  const activeClaims = new Map<string, { runId: string; projectId?: string; at: number }>();
+  const workspaceLocks = new Map<string, { issueId: string; runId: string; at: number }>();
+  const pruneClaims = () => {
+    const now = Date.now();
+    for (const [k, v] of activeClaims) if (now - v.at > CLAIM_TTL_MS) activeClaims.delete(k);
+    for (const [k, v] of workspaceLocks) if (now - v.at > CLAIM_TTL_MS) workspaceLocks.delete(k);
+  };
+  const ClaimSchema = z.object({
+    issueId: z.string().min(1),
+    runId: z.string().min(1),
+    projectId: z.string().optional(),
+  });
   app.post("/internal/claim", async (req, reply) => {
     const r = ClaimSchema.safeParse(req.body);
     if (!r.success) { reply.code(400); return { error: "validation", details: r.error.issues }; }
-    const now = Date.now();
-    for (const [k, v] of activeClaims) if (now - v.at > CLAIM_TTL_MS) activeClaims.delete(k);
-    const existing = activeClaims.get(r.data.issueId);
-    if (existing && existing.runId !== r.data.runId) {
+    pruneClaims();
+    const { issueId, runId, projectId } = r.data;
+    const existing = activeClaims.get(issueId);
+    if (existing && existing.runId !== runId) {
       app.log.warn(
-        { issueId: r.data.issueId, holder: existing.runId, denied: r.data.runId },
+        { issueId, holder: existing.runId, denied: runId },
         "[claim] doble dispatch detectado — segundo run rechazado",
       );
-      return { granted: false, holder: existing.runId };
+      return { granted: false, reason: "issue", holder: existing.runId };
     }
-    activeClaims.set(r.data.issueId, { runId: r.data.runId, at: now });
+    if (projectId) {
+      const lock = workspaceLocks.get(projectId);
+      if (lock && lock.issueId !== issueId) {
+        app.log.info(
+          { projectId, busyWith: lock.issueId, denied: issueId },
+          "[claim] workspace ocupado — el issue espera su turno",
+        );
+        return { granted: false, reason: "workspace", holder: lock.issueId };
+      }
+      workspaceLocks.set(projectId, { issueId, runId, at: Date.now() });
+    }
+    activeClaims.set(issueId, { runId, projectId, at: Date.now() });
     return { granted: true };
   });
 
