@@ -218,15 +218,40 @@ async function fetchProjectName(
   }
 }
 
-async function pickIssue(items: PaperclipIssueListItem[]): Promise<PaperclipIssueListItem | null> {
-  if (items.length === 0) return null;
-  // Strict: only in_progress (we narrowed the query to that). If somehow
-  // multiple are in_progress (shouldn't happen per-agent), pick the most recently
-  // updated one — Paperclip just bumped its updated_at on dispatch.
+/**
+ * Candidatos ordenados (in_progress, más reciente primero). OJO: cuando un
+ * agente tiene VARIOS issues in_progress (una spec despacha 3 tareas al mismo
+ * implementer), Paperclip spawnea N adapters casi simultáneos y TODOS verían
+ * el mismo "más reciente". Por eso el caller recorre esta lista reclamando
+ * cada candidato en el bridge y corre el PRIMERO que le concedan — los N
+ * procesos se reparten los N issues en vez de pelearse por uno (2026-07-02).
+ */
+function candidateIssues(items: PaperclipIssueListItem[]): PaperclipIssueListItem[] {
   const inProgress = items.filter((i) => i.status === "in_progress");
-  if (inProgress.length === 0) return null;
   inProgress.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
-  return inProgress[0]!;
+  return inProgress;
+}
+
+const CLAIM_URL =
+  process.env.BRIDGE_CLAIM_URL ?? "http://host.docker.internal:7100/internal/claim";
+
+/** Reclama un issue en el bridge host. Fail-open: si el bridge no responde, se concede. */
+async function claimIssue(issueId: string, runId: string): Promise<{ granted: boolean; holder?: string }> {
+  try {
+    const cr = await fetch(CLAIM_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issueId, runId }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (cr.ok) {
+      const j = (await cr.json()) as { granted?: boolean; holder?: string };
+      return { granted: j.granted !== false, holder: j.holder };
+    }
+  } catch {
+    /* fail-open */
+  }
+  return { granted: true };
 }
 
 export async function runPaperclipProcessMode(): Promise<number> {
@@ -266,10 +291,10 @@ export async function runPaperclipProcessMode(): Promise<number> {
     return 2;
   }
 
-  // Find the issue this dispatch is for
+  // Candidatos de este agente (puede haber varios in_progress a la vez)
   const items = await fetchAssignedIssues(apiUrl, apiKey, companyId, agentId);
-  const issue = await pickIssue(items);
-  if (!issue) {
+  const candidates = candidateIssues(items);
+  if (candidates.length === 0) {
     process.stdout.write(
       JSON.stringify({
         ok: true,
@@ -281,82 +306,77 @@ export async function runPaperclipProcessMode(): Promise<number> {
     return 0;
   }
 
-  process.stderr.write(
-    `[process-mode] picked ${issue.identifier ?? issue.id} (status=${issue.status}) for ${persona.registryId}\n`,
-  );
-
-  // Synthesize a stable runId for the tracker if Paperclip didn't pass one.
-  // Without a runId we cannot tie stage events together; the bridge tracker
-  // would create one synthetic run per event.
-  const effectiveRunId = runId ?? `process-${issue.id}-${Date.now()}`;
-
   // ── Gate de horario laboral (#11) ─────────────────────────────────────────
   // Fuera de la ventana definida en Ajustes, Paperclip no debe tomar tareas.
   // El enforcer del bridge pausa los agentes, pero este chequeo cubre la
   // carrera del borde (dispatch ya en vuelo cuando cierra la ventana):
-  // devolvemos el ticket a todo y salimos limpio, sin correr nada.
+  // devolvemos los tickets a todo y salimos limpio, sin correr nada.
   const schedCfg = loadWorkScheduleConfig();
   if (schedCfg.enabled && !isWithinSchedule(schedCfg)) {
-    try {
-      await fetch(`${apiUrl}/api/issues/${issue.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ status: "todo" }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch {
-      /* best-effort */
+    for (const cand of candidates) {
+      try {
+        await fetch(`${apiUrl}/api/issues/${cand.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ status: "todo" }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+      } catch {
+        /* best-effort */
+      }
     }
     process.stderr.write(
-      `[process-mode] fuera de horario laboral — ${issue.identifier ?? issue.id} devuelto a todo\n`,
+      `[process-mode] fuera de horario laboral — ${candidates.length} ticket(s) devueltos a todo\n`,
     );
     process.stdout.write(
       JSON.stringify({
         ok: true,
         skipped: true,
         reason: "outside work schedule",
-        issueId: issue.id,
         persona: persona.registryId,
       }) + "\n",
     );
     return 0;
   }
 
-  // ── Claim anti doble-dispatch ─────────────────────────────────────────────
-  // Paperclip a veces spawnea dos adapters para el mismo issue con ms de
-  // diferencia. Reclamamos el issue en el bridge host; si otro run ya lo
-  // tiene, salimos limpio sin tocar el ticket (el dueño lo completa).
-  // Fail-open: si el bridge no responde, seguimos (peor duplicar que frenar todo).
-  const claimUrl =
-    process.env.BRIDGE_CLAIM_URL ?? "http://host.docker.internal:7100/internal/claim";
-  try {
-    const cr = await fetch(claimUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ issueId: issue.id, runId: effectiveRunId }),
-      signal: AbortSignal.timeout(4000),
-    });
-    if (cr.ok) {
-      const claim = (await cr.json()) as { granted?: boolean; holder?: string };
-      if (claim.granted === false) {
-        process.stderr.write(
-          `[process-mode] issue ${issue.identifier ?? issue.id} ya reclamado por ${claim.holder} — duplicado, salgo\n`,
-        );
-        process.stdout.write(
-          JSON.stringify({
-            ok: true,
-            skipped: true,
-            reason: "duplicate dispatch (issue already claimed)",
-            issueId: issue.id,
-            persona: persona.registryId,
-          }) + "\n",
-        );
-        return 0;
-      }
+  // ── Claim: elegir el PRIMER candidato libre ───────────────────────────────
+  // Anti doble-dispatch + reparto: si Paperclip spawnea N adapters para este
+  // agente (N issues despachados juntos, o un dispatch duplicado), cada proceso
+  // reclama en orden y corre el primero que le concedan. Sin esto, todos
+  // "elegían" el mismo issue más reciente: uno corría y el resto salía skipped,
+  // dejando los otros tickets sin correr y al watchdog bloqueándolos (2026-07-02).
+  let issue: PaperclipIssueListItem | null = null;
+  let effectiveRunId = runId ?? "";
+  for (const cand of candidates) {
+    const candRunId = runId ?? `process-${cand.id}-${Date.now()}`;
+    const claim = await claimIssue(cand.id, candRunId);
+    if (claim.granted) {
+      issue = cand;
+      effectiveRunId = candRunId;
+      break;
     }
-  } catch {
-    /* fail-open */
+    process.stderr.write(
+      `[process-mode] ${cand.identifier ?? cand.id} ya reclamado por ${claim.holder} — pruebo el siguiente\n`,
+    );
   }
+  if (!issue) {
+    process.stderr.write(
+      `[process-mode] todos los candidatos (${candidates.length}) ya están reclamados — duplicado, salgo\n`,
+    );
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: "all in_progress issues already claimed (duplicate dispatch)",
+        persona: persona.registryId,
+      }) + "\n",
+    );
+    return 0;
+  }
+
+  process.stderr.write(
+    `[process-mode] picked ${issue.identifier ?? issue.id} (status=${issue.status}) for ${persona.registryId}\n`,
+  );
 
   // Tell the dashboard "this agent is now actively in flight on this ticket".
   await reportStage("dispatched", {

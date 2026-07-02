@@ -122,7 +122,7 @@ services:
       # updateStatus() doesn't get 403'd after every run that hits the watchdog.
       # Comma-separated UUIDs. The first one MUST be the Hermes/CEO agent
       # whose key the bridge uses for its system-level mutations.
-      PAPERCLIP_SYSTEM_AGENT_IDS: ${AICOS_HERMES_AGENT_ID:-}
+      PAPERCLIP_SYSTEM_AGENT_IDS: ${PAPERCLIP_SYSTEM_AGENT_IDS:-${AICOS_HERMES_AGENT_ID:-}}
     volumes:
       - paperclip-data:/paperclip
       # AICOS Path A: mount the host's home at the SAME path inside the
