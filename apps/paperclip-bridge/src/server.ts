@@ -38,6 +38,7 @@ import {
   startWorkScheduleEnforcer,
 } from "./work-schedule.js";
 import { listRegistryAgents } from "./registry.js";
+import { listApps, startApp, stopApp, appLogs } from "./app-launcher.js";
 import { fireN8n } from "./n8n.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
@@ -835,6 +836,21 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   } else {
     app.log.warn("work-schedule enforcer NOT started — missing paperclip creds");
   }
+
+  // ─── App Launcher (#12) ──────────────────────────────────────────────────
+  // Levantar/parar las apps generadas por los agentes en ~/Projects.
+  app.get("/apps", async () => ({ apps: await listApps() }));
+  app.post<{ Params: { slug: string } }>("/apps/:slug/start", async (req, reply) => {
+    const r = startApp(req.params.slug);
+    if (!r.ok) reply.code(409);
+    return r;
+  });
+  app.post<{ Params: { slug: string } }>("/apps/:slug/stop", async (req, reply) => {
+    const r = stopApp(req.params.slug);
+    if (!r.ok) reply.code(409);
+    return r;
+  });
+  app.get<{ Params: { slug: string } }>("/apps/:slug/logs", async (req) => appLogs(req.params.slug));
 
   // ─── Claim de despacho (guard anti doble-dispatch) ───────────────────────
   // Paperclip a veces spawnea DOS adapters para el mismo issue con ms de

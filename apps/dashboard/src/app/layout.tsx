@@ -13,6 +13,7 @@ import {
   Gauge,
   MessagesSquare,
   Plug,
+  Rocket,
   Sparkles,
   Settings,
   Shield,
@@ -35,6 +36,7 @@ const NAV = [
   { href: "/studio", label: "Strategy Room", icon: MessagesSquare },
   { href: "/control", label: "Control", icon: ShieldAlert },
   { href: "/runs", label: "Runs", icon: Terminal },
+  { href: "/apps", label: "Apps", icon: Rocket },
   { href: "/schedules", label: "Programadas", icon: CalendarClock },
 ];
 
