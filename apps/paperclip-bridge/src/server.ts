@@ -31,6 +31,13 @@ import {
 } from "./retry-manager.js";
 import { agingScan, loadAgingConfig, saveAgingConfig } from "./aging.js";
 import { loadTestGateConfig, saveTestGateConfig } from "./test-gate.js";
+import {
+  loadWorkScheduleConfig,
+  saveWorkScheduleConfig,
+  scheduleStatus,
+  startWorkScheduleEnforcer,
+} from "./work-schedule.js";
+import { listRegistryAgents } from "./registry.js";
 import { fireN8n } from "./n8n.js";
 import { orchestrate, type OrchestrateInput } from "./orchestrator.js";
 import { startSubtaskPromoter } from "./subtask-promoter.js";
@@ -778,6 +785,7 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   app.post("/internal/run-finished", async (req, reply) => {
     const r = RunFinishedSchema.safeParse(req.body);
     if (!r.success) { reply.code(400); return { error: "validation", details: r.error.issues }; }
+    activeClaims.delete(r.data.issueId); // libera el claim anti doble-dispatch
     await recordRunOutcome(r.data.issueId, r.data.identifier, r.data.disposition as Disposition).catch(() => {});
     return { ok: true };
   });
@@ -798,6 +806,61 @@ export async function startServer(opts: ServerOptions): Promise<FastifyInstance>
   // ─── Gate de tests (#9) ──────────────────────────────────────────────────
   app.get("/test-gate/config", async () => ({ config: loadTestGateConfig() }));
   app.post("/test-gate/config", async (req) => ({ config: saveTestGateConfig((req.body ?? {}) as Parameters<typeof saveTestGateConfig>[0]) }));
+
+  // ─── Horario de trabajo de Paperclip (#11) ───────────────────────────────
+  // Fuera de la ventana, el enforcer pausa los agentes del registry en
+  // Paperclip (el heartbeat saltea agentes paused) y los reanuda al abrir.
+  app.get("/work-schedule/config", async () => ({ config: loadWorkScheduleConfig() }));
+  app.post("/work-schedule/config", async (req) => ({
+    config: saveWorkScheduleConfig((req.body ?? {}) as Parameters<typeof saveWorkScheduleConfig>[0]),
+  }));
+  app.get("/work-schedule/status", async () => scheduleStatus());
+
+  const boardToken = process.env.PAPERCLIP_BOARD_TOKEN ?? opts.paperclipApiKey;
+  if (paperclipReady && boardToken) {
+    const stopEnforcer = startWorkScheduleEnforcer({
+      apiUrl: opts.paperclipApiUrl!,
+      boardToken,
+      agentIds: () =>
+        listRegistryAgents()
+          .map((a) => a.paperclipAgentId)
+          .filter((id): id is string => Boolean(id)),
+      log: (m) => app.log.info(m),
+    });
+    app.addHook("onClose", async () => stopEnforcer());
+    app.log.info(
+      { boardAuth: Boolean(process.env.PAPERCLIP_BOARD_TOKEN) },
+      "work-schedule enforcer started",
+    );
+  } else {
+    app.log.warn("work-schedule enforcer NOT started — missing paperclip creds");
+  }
+
+  // ─── Claim de despacho (guard anti doble-dispatch) ───────────────────────
+  // Paperclip a veces spawnea DOS adapters para el mismo issue con ms de
+  // diferencia (visto 2026-07-01 con RIO-8: dos runs de opus simultáneos en el
+  // mismo workspace). El process-mode reclama el issue acá antes de ejecutar;
+  // el segundo proceso recibe granted=false y sale limpio sin tocar el ticket.
+  // El claim se libera en /internal/run-finished o por TTL (cubre crashes).
+  const CLAIM_TTL_MS = 40 * 60 * 1000; // > timeout del CLI (35min)
+  const activeClaims = new Map<string, { runId: string; at: number }>();
+  const ClaimSchema = z.object({ issueId: z.string().min(1), runId: z.string().min(1) });
+  app.post("/internal/claim", async (req, reply) => {
+    const r = ClaimSchema.safeParse(req.body);
+    if (!r.success) { reply.code(400); return { error: "validation", details: r.error.issues }; }
+    const now = Date.now();
+    for (const [k, v] of activeClaims) if (now - v.at > CLAIM_TTL_MS) activeClaims.delete(k);
+    const existing = activeClaims.get(r.data.issueId);
+    if (existing && existing.runId !== r.data.runId) {
+      app.log.warn(
+        { issueId: r.data.issueId, holder: existing.runId, denied: r.data.runId },
+        "[claim] doble dispatch detectado — segundo run rechazado",
+      );
+      return { granted: false, holder: existing.runId };
+    }
+    activeClaims.set(r.data.issueId, { runId: r.data.runId, at: now });
+    return { granted: true };
+  });
 
   // ─── Disparo de workflows n8n (#10) ──────────────────────────────────────
   const N8nFireSchema = z.object({

@@ -24,6 +24,12 @@ export function SettingsClient() {
   // test gate (#9)
   const [tg, setTg] = useState<{ enabled: boolean; command?: string; timeoutSec: number } | null>(null);
   const [tgBusy, setTgBusy] = useState(false);
+  // horario de trabajo (#11)
+  type DayWin = { from: string; to: string };
+  type WsDays = Record<string, DayWin[]>;
+  const [ws, setWs] = useState<{ enabled: boolean; timezone: string; days: WsDays } | null>(null);
+  const [wsStatus, setWsStatus] = useState<{ within: boolean; pausedByScheduler: number } | null>(null);
+  const [wsBusy, setWsBusy] = useState(false);
 
   useEffect(() => {
     fetch("/api/notifications/config").then((r) => r.json()).then((d: Cfg) => {
@@ -32,7 +38,35 @@ export function SettingsClient() {
     }).catch(() => {});
     fetch("/api/standup").then((r) => r.json()).then((d) => { setSu(d.config); setSuLast(d.last); }).catch(() => {});
     fetch("/api/test-gate").then((r) => r.json()).then((d) => setTg(d.config)).catch(() => {});
+    fetch("/api/work-schedule").then((r) => r.json()).then((d) => { if (d.config) setWs(d.config); if (d.status) setWsStatus(d.status); }).catch(() => {});
   }, []);
+
+  const WS_DAYS: { key: string; label: string }[] = [
+    { key: "mon", label: "Lun" }, { key: "tue", label: "Mar" }, { key: "wed", label: "Mié" },
+    { key: "thu", label: "Jue" }, { key: "fri", label: "Vie" }, { key: "sat", label: "Sáb" }, { key: "sun", label: "Dom" },
+  ];
+
+  const saveWs = async (next: { enabled: boolean; timezone: string; days: WsDays }) => {
+    setWs(next); setWsBusy(true);
+    try {
+      const r = await fetch("/api/work-schedule", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+      const d = await r.json().catch(() => null);
+      if (d?.config) setWs(d.config);
+      const st = await fetch("/api/work-schedule").then((x) => x.json()).catch(() => null);
+      if (st?.status) setWsStatus(st.status);
+    } finally { setWsBusy(false); }
+  };
+  const wsDayToggle = (day: string, on: boolean) => {
+    if (!ws) return;
+    const days = { ...ws.days, [day]: on ? [{ from: "08:00", to: "18:00" }] : [] };
+    void saveWs({ ...ws, days });
+  };
+  const wsDayTime = (day: string, field: "from" | "to", value: string) => {
+    if (!ws) return;
+    const cur = ws.days[day]?.[0] ?? { from: "08:00", to: "18:00" };
+    const days = { ...ws.days, [day]: [{ ...cur, [field]: value }] };
+    void saveWs({ ...ws, days });
+  };
 
   const saveTestGate = async (patch: Partial<{ enabled: boolean; command: string; timeoutSec: number }>) => {
     const next = { ...(tg || { enabled: true, timeoutSec: 300 }), ...patch };
@@ -199,6 +233,60 @@ export function SettingsClient() {
           </div>
           {tgBusy && <span className="text-2xs text-subtle">guardando…</span>}
         </div>
+      </section>
+
+      {/* Horario de trabajo de Paperclip (#11) */}
+      <section className="mt-6 rounded-xl border border-border bg-surface/40 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-fg">Horario de trabajo</h2>
+            <p className="mt-1 text-xs text-subtle">
+              Ventana en la que Paperclip despacha tareas a los agentes. Fuera de horario los agentes quedan en pausa
+              (los runs en curso terminan solos) y la sesión de IA queda libre para uso humano. El chat del Strategy Room no se ve afectado.
+            </p>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={ws?.enabled ?? false} onChange={(e) => ws && saveWs({ ...ws, enabled: e.target.checked })} />
+            <span className={ws?.enabled ? "text-success" : "text-subtle"}>{ws?.enabled ? "Activado" : "Desactivado"}</span>
+          </label>
+        </div>
+
+        {ws && (
+          <div className="mt-5 space-y-2">
+            {WS_DAYS.map((d) => {
+              const win = ws.days[d.key]?.[0];
+              const on = Boolean(win);
+              return (
+                <div key={d.key} className="flex items-center gap-3">
+                  <label className="flex w-20 cursor-pointer items-center gap-2 text-sm">
+                    <input type="checkbox" checked={on} onChange={(e) => wsDayToggle(d.key, e.target.checked)} />
+                    <span className={on ? "text-fg" : "text-subtle"}>{d.label}</span>
+                  </label>
+                  {on ? (
+                    <div className="flex items-center gap-2 text-sm text-muted">
+                      <input type="time" className={inp + " w-auto"} value={win!.from} onChange={(e) => wsDayTime(d.key, "from", e.target.value)} />
+                      <span>a</span>
+                      <input type="time" className={inp + " w-auto"} value={win!.to} onChange={(e) => wsDayTime(d.key, "to", e.target.value)} />
+                    </div>
+                  ) : (
+                    <span className="text-xs text-ghost">sin despacho</span>
+                  )}
+                </div>
+              );
+            })}
+            <div className="mt-3 flex items-center gap-3 text-xs">
+              <span className="text-subtle">Zona horaria: {ws.timezone}</span>
+              {wsStatus && ws.enabled && (
+                <span className={wsStatus.within ? "text-success" : "text-warning"}>
+                  {wsStatus.within
+                    ? "● ahora DENTRO de horario — despachando"
+                    : `● ahora FUERA de horario — ${wsStatus.pausedByScheduler} agentes en pausa`}
+                </span>
+              )}
+              {wsBusy && <span className="text-2xs text-subtle">guardando…</span>}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

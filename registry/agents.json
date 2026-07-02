@@ -55,7 +55,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": null
+      "paperclipAgentId": "2be7a589-a49a-436f-965a-95d7820ff820"
     },
     {
       "id": "it-analyst",
@@ -85,7 +85,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "6be7a606-27aa-4f43-bd74-609827417fd6"
+      "paperclipAgentId": "ff95bdda-7b5b-451f-a51e-0d9b7a7a8016"
     },
     {
       "id": "it-architect",
@@ -115,7 +115,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "a7af956f-f6be-4692-91fa-a429bffc6310"
+      "paperclipAgentId": "40520b3d-5000-4999-9c0b-0292eded1945"
     },
     {
       "id": "it-implementer",
@@ -139,13 +139,9 @@
         {
           "cli": "opencode",
           "model": "moonshotai/kimi-k2.6"
-        },
-        {
-          "cli": "hermes",
-          "model": "anthropic/claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "847bc676-51ac-419a-989f-7611505bb888"
+      "paperclipAgentId": "41cee231-f841-4e62-a6ff-4ca24feb8aa2"
     },
     {
       "id": "it-code-reviewer",
@@ -178,7 +174,7 @@
       "constraints": [
         "never_share_cli_with: it-implementer"
       ],
-      "paperclipAgentId": "b1cd6437-e88e-4a49-a579-7719c33eb694"
+      "paperclipAgentId": "84975306-bd63-4431-8bc0-ac50383d9bbd"
     },
     {
       "id": "it-qa-tester",
@@ -208,7 +204,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "5bb9c46d-370a-4362-b91f-ca640d3ce6e0"
+      "paperclipAgentId": "58deb7ba-8d5c-43f5-a255-3d87c0acc648"
     },
     {
       "id": "it-ui-ux-validator",
@@ -242,7 +238,7 @@
         "browser_automation",
         "screenshot"
       ],
-      "paperclipAgentId": "aa318d22-0ddc-4497-ab91-816f7c39237a"
+      "paperclipAgentId": "3244318d-6372-422e-b885-d862fa72c6a7"
     },
     {
       "id": "it-security-reviewer",
@@ -272,7 +268,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "eeb8b4cc-f728-4877-b3ea-7e9c3ab632d9"
+      "paperclipAgentId": "77ace60e-4fe2-4f45-8742-facb0140bcc0"
     },
     {
       "id": "it-documenter",
@@ -302,7 +298,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "473bd6f7-ee69-499b-8776-f46711724385"
+      "paperclipAgentId": "92d80c56-6777-4334-b528-f0ab60af3ca7"
     },
     {
       "id": "it-devops",
@@ -332,7 +328,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "021ad154-6877-4563-8fa3-76ccdea6f3a7"
+      "paperclipAgentId": "8becd779-80be-4de3-844b-ab0ab953a19a"
     },
     {
       "id": "marketing-strategist",
@@ -362,7 +358,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "bef52211-cb8d-461a-8a88-84868bdab16d"
+      "paperclipAgentId": "f4aa3055-9461-47ba-bd14-4f1d5aa74440"
     },
     {
       "id": "marketing-copywriter",
@@ -392,7 +388,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "51af5ab4-1ffb-4a6e-89e1-f564e780592c"
+      "paperclipAgentId": "6effe05e-c4d0-4304-81c8-c1d3956bcf23"
     },
     {
       "id": "marketing-seo",
@@ -422,7 +418,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "3a678e8e-b0fe-4305-a75d-4ae3ccaac21f"
+      "paperclipAgentId": "3969ed29-bed4-4f9c-9ced-cc5530769999"
     },
     {
       "id": "marketing-social-media",
@@ -452,7 +448,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "df7f70cc-4cc9-499b-823e-a479452a2ecd"
+      "paperclipAgentId": "50cf54ee-ed0d-4695-8e90-44d0035d673d"
     },
     {
       "id": "marketing-analytics",
@@ -482,7 +478,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "e2a0d756-7d5e-4ccd-a87b-4c962a4baa7e"
+      "paperclipAgentId": "c9803395-d63c-4759-a03a-162b0323b36d"
     },
     {
       "id": "creative-visual-designer",
@@ -515,7 +511,7 @@
       "tools": [
         "image_generation"
       ],
-      "paperclipAgentId": "3729cc64-fe99-4895-8ebf-5f459e64b2ef"
+      "paperclipAgentId": "5532014e-e9ad-4aa9-ba4c-14c1515317a1"
     },
     {
       "id": "creative-photo-curator",
@@ -545,7 +541,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "3de44b1b-db28-4668-b00a-e51629f67e93"
+      "paperclipAgentId": "40947631-d301-42d3-9b6e-2620b18754af"
     },
     {
       "id": "creative-video-editor",
@@ -579,7 +575,7 @@
         "ffmpeg",
         "video_pipeline"
       ],
-      "paperclipAgentId": "2db42d2f-4d50-4454-9285-a66edf04538d"
+      "paperclipAgentId": "1cdbd7b7-3bc2-4b92-bce9-34d57b836182"
     },
     {
       "id": "creative-audio-producer",
@@ -613,7 +609,7 @@
         "audio_processing",
         "tts"
       ],
-      "paperclipAgentId": "2701f28c-6a34-4226-9d91-8d6af1fc8add"
+      "paperclipAgentId": "562ca520-d64e-4469-93f8-3f8d1622878b"
     },
     {
       "id": "bi-data-analyst",
@@ -643,7 +639,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "c20d6acc-687c-4a17-9ca9-c3cd74bb4626"
+      "paperclipAgentId": "35786054-0842-4c8a-b599-4d8650b36681"
     },
     {
       "id": "bi-dashboard-creator",
@@ -673,7 +669,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "1e576e51-0c2d-4775-8a9c-78cc04125b58"
+      "paperclipAgentId": "2fe3f261-35fa-42a3-aaa8-cd2058019154"
     },
     {
       "id": "bi-kpi-tracker",
@@ -703,7 +699,7 @@
           "model": "claude-sonnet-4-6"
         }
       ],
-      "paperclipAgentId": "00ed731c-9572-4bb0-bfd8-b96d291a4479"
+      "paperclipAgentId": "7c8d5ac1-765f-4d16-bd34-b765dbd803a0"
     },
     {
       "id": "bi-forecaster",
@@ -733,7 +729,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "38a741a5-4fee-4289-92ef-e1b0d2a461cb"
+      "paperclipAgentId": "66510995-893f-46a8-bf2c-43ed95df90c5"
     },
     {
       "id": "research-market",
@@ -767,7 +763,7 @@
         "web_search",
         "web_extract"
       ],
-      "paperclipAgentId": "34af6e4b-f067-435f-a2ef-b56652b93813"
+      "paperclipAgentId": "c08720fa-27f3-496b-9ad1-59de33846779"
     },
     {
       "id": "research-trends",
@@ -801,7 +797,7 @@
         "web_search",
         "social_apis"
       ],
-      "paperclipAgentId": "4fa2cb14-df4b-4b0a-ab12-3773bc6290f9"
+      "paperclipAgentId": "e8af5f28-bf32-4a44-8a8a-ed631c3519cb"
     },
     {
       "id": "research-opportunity",
@@ -831,7 +827,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "3d84ec9f-202b-4387-b80c-50e84aa18a6e"
+      "paperclipAgentId": "ef4effeb-7cfc-4e3b-bfc4-10b9991b4f98"
     },
     {
       "id": "research-partner-scout",
@@ -861,7 +857,7 @@
           "model": "xiaomi/mimo-vl-7b-rl"
         }
       ],
-      "paperclipAgentId": "3eee0f3d-61ea-4e39-9c2b-ceddc4b02f2a"
+      "paperclipAgentId": "42e21ebb-615a-4aba-bada-e3d3335c2365"
     }
   ]
 }

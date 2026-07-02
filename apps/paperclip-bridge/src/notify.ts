@@ -1,14 +1,21 @@
 /**
- * Notificaciones salientes por Telegram.
+ * Notificaciones salientes: Telegram y/o webhook genérico (n8n).
  *
  * Lee la config de `~/.config/aicos/notifications.json` (la edita el dashboard
  * en Ajustes). El home del host está montado en el container (Path A), así que
  * tanto el bridge host como el bridge en-container leen el mismo archivo.
  *
  * Config:
- *   { "enabled": true, "botToken": "123:ABC",
- *     "defaultChatId": "123456",            // fallback hasta tener auth por usuario
- *     "users": { "jgomez": "123456" } }     // username (post-auth) → chatId
+ *   { "enabled": true,
+ *     "botToken": "123:ABC",                 // opcional — Telegram directo
+ *     "defaultChatId": "123456",             // fallback hasta tener auth por usuario
+ *     "users": { "jgomez": "123456" },       // username (post-auth) → chatId
+ *     "webhookUrl": "https://n8n/.../aicos"  // opcional — POST {text, username, source}
+ *   }
+ *
+ * La falta de botToken NO es impedimento: si hay webhookUrl, la notificación
+ * sale igual por ahí (p.ej. workflow n8n webhook→email/Telegram). Si están
+ * los dos configurados, se envía por ambos canales.
  *
  * Nunca rompe el run: cualquier error se traga.
  */
@@ -23,6 +30,7 @@ interface NotifyConfig {
   botToken?: string;
   defaultChatId?: string;
   users?: Record<string, string>;
+  webhookUrl?: string;
 }
 
 function loadConfig(): NotifyConfig | null {
@@ -39,22 +47,47 @@ function loadConfig(): NotifyConfig | null {
  */
 export async function notify(text: string, opts?: { username?: string }): Promise<void> {
   const cfg = loadConfig();
-  if (!cfg || cfg.enabled === false || !cfg.botToken) return;
-  const chatId =
-    (opts?.username && cfg.users?.[opts.username]) || cfg.defaultChatId;
-  if (!chatId) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${cfg.botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "Markdown",
-        disable_web_page_preview: true,
+  if (!cfg || cfg.enabled === false) return;
+
+  const jobs: Promise<unknown>[] = [];
+
+  if (cfg.botToken) {
+    const chatId =
+      (opts?.username && cfg.users?.[opts.username]) || cfg.defaultChatId;
+    if (chatId) {
+      jobs.push(
+        fetch(`https://api.telegram.org/bot${cfg.botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text,
+            parse_mode: "Markdown",
+            disable_web_page_preview: true,
+          }),
+          signal: AbortSignal.timeout(6000),
+        }),
+      );
+    }
+  }
+
+  if (cfg.webhookUrl) {
+    jobs.push(
+      fetch(cfg.webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          username: opts?.username,
+          source: "aicos-bridge",
+        }),
+        signal: AbortSignal.timeout(6000),
       }),
-      signal: AbortSignal.timeout(6000),
-    });
+    );
+  }
+
+  try {
+    await Promise.allSettled(jobs);
   } catch {
     /* las notificaciones nunca rompen el run */
   }

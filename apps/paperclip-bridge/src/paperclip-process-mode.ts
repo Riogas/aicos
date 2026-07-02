@@ -50,6 +50,7 @@ import {
 import { createQuotaClient } from "./quota-client.js";
 import { createLearningClient } from "./learning-client.js";
 import { createPolicyClient } from "./policy-client.js";
+import { loadWorkScheduleConfig, isWithinSchedule } from "./work-schedule.js";
 
 interface PaperclipIssueListItem {
   id: string;
@@ -288,6 +289,74 @@ export async function runPaperclipProcessMode(): Promise<number> {
   // Without a runId we cannot tie stage events together; the bridge tracker
   // would create one synthetic run per event.
   const effectiveRunId = runId ?? `process-${issue.id}-${Date.now()}`;
+
+  // ── Gate de horario laboral (#11) ─────────────────────────────────────────
+  // Fuera de la ventana definida en Ajustes, Paperclip no debe tomar tareas.
+  // El enforcer del bridge pausa los agentes, pero este chequeo cubre la
+  // carrera del borde (dispatch ya en vuelo cuando cierra la ventana):
+  // devolvemos el ticket a todo y salimos limpio, sin correr nada.
+  const schedCfg = loadWorkScheduleConfig();
+  if (schedCfg.enabled && !isWithinSchedule(schedCfg)) {
+    try {
+      await fetch(`${apiUrl}/api/issues/${issue.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ status: "todo" }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    } catch {
+      /* best-effort */
+    }
+    process.stderr.write(
+      `[process-mode] fuera de horario laboral — ${issue.identifier ?? issue.id} devuelto a todo\n`,
+    );
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: "outside work schedule",
+        issueId: issue.id,
+        persona: persona.registryId,
+      }) + "\n",
+    );
+    return 0;
+  }
+
+  // ── Claim anti doble-dispatch ─────────────────────────────────────────────
+  // Paperclip a veces spawnea dos adapters para el mismo issue con ms de
+  // diferencia. Reclamamos el issue en el bridge host; si otro run ya lo
+  // tiene, salimos limpio sin tocar el ticket (el dueño lo completa).
+  // Fail-open: si el bridge no responde, seguimos (peor duplicar que frenar todo).
+  const claimUrl =
+    process.env.BRIDGE_CLAIM_URL ?? "http://host.docker.internal:7100/internal/claim";
+  try {
+    const cr = await fetch(claimUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issueId: issue.id, runId: effectiveRunId }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (cr.ok) {
+      const claim = (await cr.json()) as { granted?: boolean; holder?: string };
+      if (claim.granted === false) {
+        process.stderr.write(
+          `[process-mode] issue ${issue.identifier ?? issue.id} ya reclamado por ${claim.holder} — duplicado, salgo\n`,
+        );
+        process.stdout.write(
+          JSON.stringify({
+            ok: true,
+            skipped: true,
+            reason: "duplicate dispatch (issue already claimed)",
+            issueId: issue.id,
+            persona: persona.registryId,
+          }) + "\n",
+        );
+        return 0;
+      }
+    }
+  } catch {
+    /* fail-open */
+  }
 
   // Tell the dashboard "this agent is now actively in flight on this ticket".
   await reportStage("dispatched", {
