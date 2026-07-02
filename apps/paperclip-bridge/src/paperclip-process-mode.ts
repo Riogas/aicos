@@ -266,7 +266,10 @@ async function claimIssue(issueId: string, runId: string, projectId?: string | n
  * si el workspace sigue ocupado, el caller devuelve el ticket a `todo` y
  * Paperclip lo re-despacha más tarde.
  */
-const WORKSPACE_WAIT_MS = Number(process.env.BRIDGE_WORKSPACE_WAIT_MS) || 120_000;
+// 30 min: esperar DENTRO del run mantiene un camino de ejecución vivo para el
+// recovery de Paperclip (devolver el ticket a todo hacía que el scanner contara
+// el dispatch como fallido y lo escalara a blocked — visto 2026-07-02).
+const WORKSPACE_WAIT_MS = Number(process.env.BRIDGE_WORKSPACE_WAIT_MS) || 1_800_000;
 
 async function claimWithWait(issueId: string, runId: string, projectId?: string | null): Promise<ClaimResult> {
   const deadline = Date.now() + WORKSPACE_WAIT_MS;

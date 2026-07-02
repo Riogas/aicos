@@ -1,10 +1,14 @@
 /**
- * Reintentos inteligentes + escalado a humano.
+ * Reintentos inteligentes + reintento persistente.
  *
  * Cuando un run termina FALLIDO (exit!=0) o VACÍO (exit 0 sin output útil — p.ej.
  * timeout/reconnect del CLI), el ticket se re-lanza automáticamente con backoff
- * exponencial hasta N intentos. Si agota los intentos, se ESCALA a un humano
- * (comentario + aviso Telegram fuerte) y se deja de reintentar.
+ * exponencial hasta N intentos. Agotados esos, pasa a MODO PERSISTENTE (pedido
+ * del operador 2026-07-02): se sigue reintentando para siempre cada
+ * `persistEveryMinutes` (default 30), pero SOLO dentro del horario laboral —
+ * si la ventana cierra, el reintento queda pendiente y dispara al abrir la
+ * ventana del día siguiente. Esto cubre "claude sin tokens": cuando la sesión
+ * levanta, el próximo reintento dentro de ventana lo retoma solo. Sin mails.
  *
  * El re-lanzamiento usa el mecanismo canónico: PATCH status=todo → Paperclip
  * re-despacha el ticket al agente. El procesamiento de los reintentos diferidos
@@ -15,7 +19,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { notify } from "./notify.js";
+import { loadWorkScheduleConfig, isWithinSchedule } from "./work-schedule.js";
 
 const HOME = process.env.HOME || "/home/vagrant";
 const CFG_PATH = process.env.AICOS_RETRY_CONFIG || join(HOME, ".config", "aicos", "retry.json");
@@ -27,11 +31,13 @@ export type Disposition = "completed" | "failed" | "empty" | "held";
 
 export interface RetryConfig {
   enabled: boolean;
-  maxAttempts: number;       // reintentos automáticos antes de escalar
+  maxAttempts: number;       // reintentos con backoff antes del modo persistente
   backoffMinutes: number[];  // espera por reintento (se usa el último si faltan)
+  /** Modo persistente: cadencia del reintento eterno (min). 0 = desactivado (escala y para). */
+  persistEveryMinutes: number;
 }
 
-const DEFAULTS: RetryConfig = { enabled: true, maxAttempts: 3, backoffMinutes: [2, 10, 30] };
+const DEFAULTS: RetryConfig = { enabled: true, maxAttempts: 3, backoffMinutes: [2, 10, 30], persistEveryMinutes: 30 };
 
 export function loadRetryConfig(): RetryConfig {
   try {
@@ -40,6 +46,7 @@ export function loadRetryConfig(): RetryConfig {
       enabled: d.enabled !== false,
       maxAttempts: Number.isFinite(d.maxAttempts) && d.maxAttempts > 0 ? Math.min(d.maxAttempts, 10) : DEFAULTS.maxAttempts,
       backoffMinutes: Array.isArray(d.backoffMinutes) && d.backoffMinutes.length ? d.backoffMinutes.map(Number).filter((n: number) => n >= 0) : DEFAULTS.backoffMinutes,
+      persistEveryMinutes: Number.isFinite(d.persistEveryMinutes) && d.persistEveryMinutes >= 0 ? Math.min(d.persistEveryMinutes, 720) : DEFAULTS.persistEveryMinutes,
     };
   } catch {
     return { ...DEFAULTS };
@@ -52,6 +59,7 @@ export function saveRetryConfig(cfg: Partial<RetryConfig>): RetryConfig {
     enabled: cfg.enabled ?? cur.enabled,
     maxAttempts: cfg.maxAttempts ?? cur.maxAttempts,
     backoffMinutes: cfg.backoffMinutes ?? cur.backoffMinutes,
+    persistEveryMinutes: cfg.persistEveryMinutes ?? cur.persistEveryMinutes,
   };
   mkdirSync(dirname(CFG_PATH), { recursive: true });
   writeFileSync(CFG_PATH, JSON.stringify(next, null, 2));
@@ -124,24 +132,33 @@ export async function recordRunOutcome(issueId: string, identifier: string | und
   if (!cfg.enabled) return;
 
   const st: TicketRetry = state[issueId] ?? { attempts: 0, escalated: false };
-  if (st.escalated) return; // ya escalado — lo maneja un humano
   if (identifier) st.identifier = identifier;
   st.attempts += 1;
   st.lastFailedAt = new Date().toISOString();
 
   if (st.attempts > cfg.maxAttempts) {
-    st.escalated = true;
-    st.nextDueAt = undefined;
+    // MODO PERSISTENTE: no se abandona nunca — se sigue reintentando cada
+    // persistEveryMinutes dentro del horario laboral. Con 0 se escala y para
+    // (comportamiento viejo). Sin mails ni avisos (pedido del operador).
+    const ref = st.identifier || issueId;
+    if (!st.escalated) {
+      st.escalated = true; // visible en el dashboard como "persistente"
+      await postComment(
+        issueId,
+        cfg.persistEveryMinutes > 0
+          ? `♻️ **Reintento persistente.** El ticket falló ${cfg.maxAttempts} reintento(s) con backoff; ahora se re-lanza cada ${cfg.persistEveryMinutes} min dentro del horario laboral hasta completarse.`
+          : `🚨 **Escalado a un humano.** El ticket falló ${cfg.maxAttempts} reintento(s) automático(s) y sigue sin completarse. Requiere intervención manual.`,
+      );
+      try { await patchStatus(issueId, "blocked"); } catch { /* ya suele estar blocked */ }
+    }
+    st.nextDueAt = cfg.persistEveryMinutes > 0 ? Date.now() + cfg.persistEveryMinutes * 60_000 : undefined;
     state[issueId] = st;
     saveState(state);
-    const ref = st.identifier || issueId;
-    await postComment(
-      issueId,
-      `🚨 **Escalado a un humano.** El ticket falló ${cfg.maxAttempts} reintento(s) automático(s) y sigue sin completarse. Requiere intervención manual — revisá el último error y re-lanzalo cuando esté resuelto.`,
+    process.stderr.write(
+      cfg.persistEveryMinutes > 0
+        ? `[retry] PERSISTENT ${ref} — next attempt in ${cfg.persistEveryMinutes}min (attempt ${st.attempts})\n`
+        : `[retry] ESCALATED ${ref} after ${cfg.maxAttempts} retries\n`,
     );
-    try { await patchStatus(issueId, "blocked"); } catch { /* ya suele estar blocked */ }
-    void notify(`🚨 *${ref}* escalado tras ${cfg.maxAttempts} reintentos fallidos — necesita intervención humana.`);
-    process.stderr.write(`[retry] ESCALATED ${ref} after ${cfg.maxAttempts} retries\n`);
     return;
   }
 
@@ -157,16 +174,28 @@ export async function recordRunOutcome(issueId: string, identifier: string | und
 export async function processDueRetries(now: number = Date.now()): Promise<void> {
   const cfg = loadRetryConfig();
   if (!cfg.enabled || !KEY) return;
+  // Fuera del horario laboral NO se re-lanza nada: el reintento queda vencido
+  // y dispara apenas abre la ventana (del día siguiente si hace falta).
+  const sched = loadWorkScheduleConfig();
+  if (sched.enabled && !isWithinSchedule(sched)) return;
   const state = loadState();
   let dirty = false;
   for (const [issueId, st] of Object.entries(state)) {
-    if (st.escalated || !st.nextDueAt || st.nextDueAt > now) continue;
+    if (!st.nextDueAt || st.nextDueAt > now) continue;
+    if (st.escalated && cfg.persistEveryMinutes <= 0) continue; // modo viejo: escalado = parado
     try {
-      await postComment(issueId, `🔁 Reintento automático ${st.attempts}/${cfg.maxAttempts} — re-despachando el ticket.`);
+      await postComment(
+        issueId,
+        st.escalated
+          ? `♻️ Reintento persistente (cada ${cfg.persistEveryMinutes} min en horario) — re-despachando el ticket.`
+          : `🔁 Reintento automático ${st.attempts}/${cfg.maxAttempts} — re-despachando el ticket.`,
+      );
       await patchStatus(issueId, "todo");
-      st.nextDueAt = undefined;
+      // En modo persistente ya programamos el próximo intento por si este
+      // también falla; si completa, recordRunOutcome limpia el estado.
+      st.nextDueAt = st.escalated ? now + cfg.persistEveryMinutes * 60_000 : undefined;
       dirty = true;
-      process.stderr.write(`[retry] re-launched ${st.identifier || issueId} (attempt ${st.attempts})\n`);
+      process.stderr.write(`[retry] re-launched ${st.identifier || issueId} (attempt ${st.attempts}${st.escalated ? ", persistent" : ""})\n`);
     } catch (e) {
       // dejamos nextDueAt para reintentar en el próximo tick
       process.stderr.write(`[retry] re-launch ${issueId} failed: ${(e as Error).message}\n`);
